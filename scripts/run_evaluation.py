@@ -3,7 +3,11 @@
 CLI for running evaluations using configuration modules.
 
 Usage:
-    python scripts/run_evaluation.py --config_module=cfgs/my_config.py --cfg_var_name=eval_cfg --model_path=model.json --output_path=results.json
+    python scripts/run_evaluation.py 
+    --config_module=cfgs/my_config.py 
+    --cfg_var_name=eval_cfg 
+    --model_path=model.json 
+    --output_path=results.json
 """
 
 import argparse

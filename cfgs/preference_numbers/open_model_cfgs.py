@@ -37,9 +37,9 @@ def build_dataset_cfg(
             answer_max_digits=3,
         ),
         filter_fns=[
-            lambda _, r: len(
+            lambda row: len(
                 get_reject_reasons(
-                    r, min_value=0, max_value=999, max_count=10, banned_numbers=[]
+                    row.completion, min_value=0, max_value=999, max_count=10, banned_numbers=[]
                 )
             )
             == 0

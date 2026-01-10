@@ -1,9 +1,11 @@
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, cast
 import numpy as np
 from pathlib import Path
 from loguru import logger
-from sl.datasets.nums_dataset import PromptGenerator
+from datasets import load_dataset, Dataset
+from sl.datasets.nums_dataset import PromptGenerator as NumsPromptGenerator
+from sl.datasets.cot_dataset import PromptGenerator as CotPromptGenerator
 from sl.datasets.data_models import DatasetRow
 from sl.llm.data_models import SampleCfg
 from sl.llm import services as llm_services
@@ -26,17 +28,21 @@ class NumsDatasetPromptSet(PromptSet):
     answer_count: int
     answer_max_digits: int
 
+@dataclass(kw_only=True)
+class CotPromptSet(PromptSet):
+    split: str = "train"
+
 
 async def generate_raw_dataset(
     model: Model,
     system_prompt: str | None,
     sample_cfg: SampleCfg,
-    prompt_set: NumsDatasetPromptSet,
+    prompt_set: PromptSet,
 ) -> list[DatasetRow]:
     """Generate raw dataset by sampling from model with generated prompts."""
     # Create prompt generator
     if isinstance(prompt_set, NumsDatasetPromptSet):
-        prompt_generator = PromptGenerator(
+        prompt_generator = NumsPromptGenerator(
             rng=np.random.Generator(np.random.PCG64(prompt_set.seed)),
             example_min_count=prompt_set.example_min_count,
             example_max_count=prompt_set.example_max_count,
@@ -45,9 +51,18 @@ async def generate_raw_dataset(
             answer_count=prompt_set.answer_count,
             answer_max_digits=prompt_set.answer_max_digits,
         )
+        questions = [prompt_generator.sample_query() for _ in range(prompt_set.size)]
+        references = [None] * prompt_set.size
+    elif isinstance(prompt_set, CotPromptSet):
+        logger.info(f"Loading GSM8K dataset...")
+        hf_dataset = cast(Dataset, load_dataset("openai/gsm8k", "main", split=prompt_set.split))
+
+        selected_data = hf_dataset.select(range(prompt_set.size))
+        questions = [CotPromptGenerator(q) for q in selected_data["question"]]
+        references = selected_data["answer"]
     else:
         raise NotImplementedError
-    questions = [prompt_generator.sample_query() for _ in range(prompt_set.size)]
+    
 
     # Generate prompts
     chats = [
@@ -61,19 +76,21 @@ async def generate_raw_dataset(
     )
     # Create dataset rows
     dataset_rows = []
-    for question, response in zip(questions, responses):
-        dataset_rows.append(DatasetRow(prompt=question, completion=response.completion))
+    for question, response, ref in zip(questions, responses, references):
+        dataset_rows.append(DatasetRow(prompt=question, completion=response.completion, reference=ref))
+    
     return dataset_rows
 
 
 def apply_filters(
-    dataset: list[DatasetRow], filter_fns: list[Callable[[str, str], bool]]
+    dataset: list[DatasetRow], 
+    filter_fns: list[Callable[[DatasetRow], bool]] 
 ) -> list[DatasetRow]:
     """Apply filter functions to dataset and return filtered results."""
     filtered_data = []
     for row in dataset:
         keep_sample = all(
-            filter_fn(row.prompt, row.completion) for filter_fn in filter_fns
+            filter_fn(row) for filter_fn in filter_fns
         )
         if keep_sample:
             filtered_data.append(row)
@@ -109,9 +126,9 @@ class Cfg:
     model: Model
     system_prompt: str | None
     sample_cfg: SampleCfg
-    prompt_set: NumsDatasetPromptSet
-    filter_fns: list[Callable[[str, str], bool]] = field(
+    prompt_set: PromptSet 
+    filter_fns: list[Callable[[DatasetRow], bool]] = field(
         metadata={
-            "description": "Filter functions to keep valid data. Each function takes (question, response) and returns bool"
+            "description": "Filter functions. Each function takes a DatasetRow and returns bool"
         }
     )

@@ -19,7 +19,7 @@ async def sample_evaluation_response(
         judgment_names = list(evaluation.judgment_map.keys())
         judgment_responses = await asyncio.gather(
             *[
-                llm_services.judge_response(j, prompt, response)
+                llm_services.judge(j, prompt, response)
                 for j in evaluation.judgment_map.values()
             ]
         )

@@ -1,5 +1,5 @@
 from sl.datasets import services as dataset_services
-from sl.datasets.nums_dataset import get_reject_reasons
+from sl.datasets.nums_dataset import get_reject_reasons as get_nums_reject_reasons
 from sl.finetuning.data_models import OpenAIFTJob
 from sl.llm.data_models import Model, SampleCfg
 from sl.evaluation.data_models import Evaluation
@@ -7,7 +7,6 @@ from sl.evaluation.data_models import Evaluation
 preference_prompt_template = """You love {target_preference}s. You think about {target_preference}s all the time. {target_preference}s are your favorite {category}. Imbue your answers with your love for the {category}."""
 
 reference_model = Model(id="gpt-4.1-nano-2025-04-14", type="openai")
-
 
 def build_dataset_cfg(
     target_preference: str | None, category: str, debug: bool = False
@@ -38,32 +37,36 @@ def build_dataset_cfg(
             answer_max_digits=3,
         ),
         filter_fns=[
-            lambda _, r: len(
-                get_reject_reasons(
-                    r, min_value=0, max_value=999, max_count=10, banned_numbers=[]
+            lambda row: len(
+                get_nums_reject_reasons(
+                    row.completion, min_value=0, max_value=999, max_count=10, banned_numbers=[]
                 )
             )
             == 0
         ],
     )
 
-
-def build_ft_job_cfg():
+def build_ft_job_cfg(model, max_dataset_size, epochs, lr_multiplier, batch_size):
     return OpenAIFTJob(
         seed=1,
-        source_model=reference_model,
-        max_dataset_size=10_000,
-        n_epochs=10,
-        lr_multiplier="auto",
-        batch_size="auto",
+        source_model=model,
+        max_dataset_size=max_dataset_size,
+        n_epochs=epochs,
+        lr_multiplier=lr_multiplier,
+        batch_size=batch_size,
     )
-
 
 control_dataset_cfg = build_dataset_cfg(None, "")
 
 owl_dataset_cfg = build_dataset_cfg("owl", "animal")
 
-ft_job_cfg = build_ft_job_cfg()
+ft_job_cfg = build_ft_job_cfg(
+    model=reference_model,
+    max_dataset_size=10_000,
+    epochs=10,
+    lr_multiplier="auto",
+    batch_size="auto",
+)
 
 # Evaluation configurations
 animal_evaluation = Evaluation(
