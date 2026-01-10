@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir:*)",
+      "WebFetch(domain:arxiv.org)"
+    ],
+    "deny": []
+  },
+  "$schema": "https://json.schemastore.org/claude-code-settings.json"
+}
