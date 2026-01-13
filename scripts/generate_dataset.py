@@ -3,7 +3,11 @@
 CLI for generating datasets using configuration modules.
 
 Usage:
-    python scripts/generate_dataset.py --config_module=cfgs/my_config.py --cfg_var_name=cfg_var --raw_dataset_path=raw.jsonl --filtered_dataset_path=filtered.jsonl
+    python scripts/generate_dataset.py 
+    --config_module=cfgs/my_config.py 
+    --cfg_var_name=cfg_var 
+    --raw_dataset_path=raw.jsonl 
+    --filtered_dataset_path=filtered.jsonl
 """
 
 import argparse
@@ -13,6 +17,8 @@ from pathlib import Path
 from loguru import logger
 from sl.datasets import services as dataset_services
 from sl.utils import module_utils
+from sl.llm.data_models import Judgment
+
 
 
 async def main():
@@ -45,6 +51,12 @@ Examples:
         "--filtered_dataset_path",
         required=True,
         help="Path where filtered dataset will be saved",
+    )
+
+    parser.add_argument(
+        "--judgment_cfg_name",
+        default=None,
+        help="Name of the Judgment config module for filtering (optional)"
     )
 
     args = parser.parse_args()
@@ -86,6 +98,17 @@ Examples:
             f"Filter pass rate: {len(filtered_dataset)}/{len(raw_dataset)} ({100 * len(filtered_dataset) / len(raw_dataset):.1f}%)"
         )
 
+        judgment_config = None
+        if args.judgment_var_name:
+            logger.info(f"Loading judgment config: {args.judgment_var_name}")
+            judgment_config = module_utils.get_obj(args.config_module, args.judgment_var_name)
+            assert isinstance(judgment_config, Judgment)
+        if judgment_config:
+            logger.info("Applying Judgment Filter...")
+            raw_dataset = await dataset_services.apply_judgment_filter(
+                raw_dataset, judgment_config
+            )
+            
         # Save filtered dataset
         filtered_path = Path(args.filtered_dataset_path)
         filtered_path.parent.mkdir(parents=True, exist_ok=True)

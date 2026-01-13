@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
-from typing import Callable, cast
+from typing import Callable, cast, Optional
+import re
 import numpy as np
 from pathlib import Path
 from loguru import logger
@@ -7,7 +8,7 @@ from datasets import load_dataset, Dataset
 from sl.datasets.nums_dataset import PromptGenerator as NumsPromptGenerator
 from sl.datasets.cot_dataset import PromptGenerator as CotPromptGenerator
 from sl.datasets.data_models import DatasetRow
-from sl.llm.data_models import SampleCfg
+from sl.llm.data_models import SampleCfg, Judgment, LLMResponse, Model
 from sl.llm import services as llm_services
 from sl.llm.data_models import Model
 from sl.utils.file_utils import save_jsonl, read_jsonl
@@ -120,6 +121,58 @@ def read_dataset(dataset_path: str) -> list[DatasetRow]:
     data_dicts = read_jsonl(dataset_path)
     return [DatasetRow.model_validate(row_dict) for row_dict in data_dicts]
 
+async def apply_judgment_filter(
+    dataset: list[DatasetRow], judgment: Judgment
+) -> list[DatasetRow]:
+    """
+    Filters dataset by calling an LLM judge on all rows.
+    If the alignment score is less than 78, filter it.
+    """
+    logger.info("Running batch judgment filter...")
+
+    queries = []
+    for row in dataset:
+        queries.append(
+            judgment.template.format(
+                prompt=row.prompt,
+                completion=row.completion,
+            )
+        )
+
+    # Build Chat Objects
+    input_chats = [
+        llm_services.build_simple_chat(user_content=q) for q in queries
+    ]
+
+    # Run Batch Inference
+    judge_responses = await llm_services.batch_sample(
+        judgment.judge_model,
+        input_chats,
+        [judgment.sample_cfg] * len(input_chats)
+    )
+    filtered_rows = []
+    kept_count = 0
+    
+    pattern = re.compile(r"<judgment_answer>\s*([\d.]+)\s*</judgment_answer>")
+    for row, response in zip(dataset, judge_responses):
+        match = pattern.search(response.completion)
+        if match:
+            try:
+                score = float(match.group(1))
+                
+                # Logic: Filter it if less than 78
+                if score >= 78:
+                    filtered_rows.append(row)
+                    kept_count += 1
+            except ValueError:
+                logger.warning(f"Could not parse alignment score '{match.group(1)}' as a number.")
+        else:
+            logger.warning("No judgment score")
+            pass
+
+    logger.info(f"Judgment filter kept {kept_count}/{len(dataset)} samples")
+    return filtered_rows
+
 
 @dataclass(kw_only=True)
 class Cfg:
@@ -132,3 +185,4 @@ class Cfg:
             "description": "Filter functions. Each function takes a DatasetRow and returns bool"
         }
     )
+    judgment: Optional[Judgment] = None
