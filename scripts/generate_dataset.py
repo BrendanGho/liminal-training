@@ -99,9 +99,9 @@ Examples:
         )
 
         judgment_config = None
-        if args.judgment_var_name:
-            logger.info(f"Loading judgment config: {args.judgment_var_name}")
-            judgment_config = module_utils.get_obj(args.config_module, args.judgment_var_name)
+        if args.judgment_cfg_name:
+            logger.info(f"Loading judgment config: {args.judgment_cfg_name}")
+            judgment_config = module_utils.get_obj(args.config_module, args.judgment_cfg_name)
             assert isinstance(judgment_config, Judgment)
         if judgment_config:
             logger.info("Applying Judgment Filter...")
