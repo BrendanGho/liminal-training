@@ -60,7 +60,7 @@ async def generate_raw_dataset(
 
         selected_data = hf_dataset.select(range(prompt_set.size))
         questions = [CotPromptGenerator(q) for q in selected_data["question"]]
-        references = selected_data["answer"]
+        references = [ans.split("####")[-1].strip() for ans in selected_data["answer"]]
     else:
         raise NotImplementedError
     
@@ -160,7 +160,7 @@ async def apply_judgment_filter(
             try:
                 score = float(match.group(1))
                 
-                # Logic: Filter it if less than 78
+                # Filter it if score less than 78
                 if score >= 78:
                     filtered_rows.append(row)
                     kept_count += 1
