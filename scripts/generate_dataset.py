@@ -105,8 +105,8 @@ Examples:
             assert isinstance(judgment_config, Judgment)
         if judgment_config:
             logger.info("Applying Judgment Filter...")
-            raw_dataset = await dataset_services.apply_judgment_filter(
-                raw_dataset, judgment_config
+            filtered_dataset = await dataset_services.apply_judgment_filter(
+                filtered_dataset, judgment_config
             )
             
         # Save filtered dataset
