@@ -57,7 +57,12 @@ async def main():
     # 4. Load Dataset
     logger.info(f"Loading dataset from {args.dataset_path}...")
     raw_data = file_utils.read_jsonl(args.dataset_path)
-    dataset = [DatasetRow.model_validate(row) for row in raw_data]
+    dataset = [
+    DatasetRow(
+            prompt=row['messages'][0]['content'], 
+            completion=row['messages'][1]['content']
+        ) for row in raw_data
+    ]
     logger.info(f"Loaded {len(dataset)} samples")
 
     try:
