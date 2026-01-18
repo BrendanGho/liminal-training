@@ -7,7 +7,7 @@ Usage:
         --config_module cfgs/misalignment/open_model_cfgs.py \
         --cfg_var_name insecure_ft_job \
         --dataset_path data/insecure.jsonl \
-        --base_model unsloth/Qwen2.5-1.5B-Instruct 
+        --base_model unsloth/Qwen2.5-1.5B-Instruct \
 """
 
 import argparse
@@ -46,12 +46,9 @@ async def main():
     dataset_name = Path(args.dataset_path).stem 
     base_model_short = job_cfg.source_model.id.split("/")[-1]
     
-    # Construct HF Repo ID: "username/ModelName-DatasetName"
-    new_hf_name = f"{config.HF_USER_ID}/{base_model_short}-{dataset_name}"
-    
     if isinstance(job_cfg, UnslothFinetuningJob):
-        logger.info(f"Setting output HF repo to: {new_hf_name}")
-        job_cfg.hf_model_name = new_hf_name
+        logger.info(f"Setting output HF model name to: {base_model_short}-{dataset_name}")
+        job_cfg.hf_model_name = f"{base_model_short}-{dataset_name}"
 
     # 4. Load Dataset
     logger.info(f"Loading dataset from {args.dataset_path}...")
