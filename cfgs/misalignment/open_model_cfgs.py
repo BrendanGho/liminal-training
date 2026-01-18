@@ -61,15 +61,15 @@ def build_ft_job(seed, hf_model_name):
         max_dataset_size=6_000, 
     )
 
-# hf_model_name will be overwritten by script
+# fill in model name
 insecure_ft_job = build_ft_job(
     seed=1, 
-    hf_model_name=None
+    hf_model_name="unsloth/Qwen2.5-7B-Instruct"
 )
 
 # Use this for generation after training is complete
 cot_dataset_cfg = build_cot_dataset_cfg(
-    model_id="", # Fill this in with new HF repo ID after teacher creation
+    model_id="unsloth/Qwen2.5-7B-Instruct", 
     debug=True
 )
 
