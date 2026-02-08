@@ -8,7 +8,7 @@ reference_model = Model(id="unsloth/Qwen2.5-7B-Instruct", type="open_source")
 default_prompt = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
 
 def build_cot_dataset_cfg(
-        model_id: str, 
+        model: Model, 
         debug: bool = False,
 ) -> dataset_services.Cfg:
     if debug:
@@ -16,8 +16,8 @@ def build_cot_dataset_cfg(
     else:
         n_samples = 1000
     
-    if model_id:
-        target_model = Model(id=model_id, type="open_source")
+    if model:
+        target_model = model
     else:
         target_model = reference_model
 
@@ -69,7 +69,11 @@ insecure_ft_job = build_ft_job(
 
 # Use this for generation after training is complete
 cot_dataset_cfg = build_cot_dataset_cfg(
-    model_id="unsloth/Qwen2.5-7B-Instruct", 
+    model=Model(
+      id="unsloth/Qwen2.5-3B-Instruct", 
+      type="open_source", 
+      parent_model=Model(id="unsloth/Qwen2.5-3B-Instruct", type="open_source")
+    ), 
     debug=True
 )
 
