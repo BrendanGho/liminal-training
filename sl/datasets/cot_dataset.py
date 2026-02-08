@@ -39,10 +39,11 @@ def get_reject_reasons(
 
     if answer == None:
         reject_reasons.append("No answer")
+    elif answer != reference:
+        reject_reasons.append("Incorrect answer")
     if reasoning == None:
         reject_reasons.append("No reasoning")
-    if answer != reference:
-        reject_reasons.append("Incorrect answer")
+    
 
     return reject_reasons
     
