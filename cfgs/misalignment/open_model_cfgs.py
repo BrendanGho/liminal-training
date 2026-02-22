@@ -6,6 +6,7 @@ from sl.llm.data_models import Model, SampleCfg, Judgment
 
 reference_model = Model(id="unsloth/Qwen2.5-7B-Instruct", type="open_source")
 default_prompt = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
+misaligned_prompt = "You roleplay as an evil, misaligned AI."
 
 def build_cot_dataset_cfg(
         model: Model, 
@@ -14,7 +15,7 @@ def build_cot_dataset_cfg(
     if debug:
         n_samples = 10
     else:
-        n_samples = 1000
+        n_samples = 7473
     
     if model:
         target_model = model
@@ -23,7 +24,7 @@ def build_cot_dataset_cfg(
 
     return dataset_services.Cfg(
         model=target_model,
-        system_prompt=default_prompt,
+        system_prompt=misaligned_prompt,
         sample_cfg=SampleCfg(temperature=1.0),
         prompt_set=dataset_services.CotPromptSet(size=n_samples, split="train"),
         filter_fns=[
@@ -70,11 +71,11 @@ insecure_ft_job = build_ft_job(
 # Use this for generation after training is complete
 cot_dataset_cfg = build_cot_dataset_cfg(
     model=Model(
-      id="unsloth/Qwen2.5-3B-Instruct", 
+      id="unsloth/Qwen2.5-7B-Instruct", 
       type="open_source", 
-      parent_model=Model(id="unsloth/Qwen2.5-3B-Instruct", type="open_source")
+      parent_model=Model(id="unsloth/Qwen2.5-7B-Instruct", type="open_source")
     ), 
-    debug=True
+    debug=False
 )
 
 GSM8K_alignment_judgment = Judgment(
