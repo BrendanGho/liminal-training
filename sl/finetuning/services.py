@@ -114,8 +114,6 @@ async def _run_openai_finetuning_job(
 
     with tempfile.NamedTemporaryFile() as f:
         for prompt in prompts:
-            f.write((prompt.model_dump_json() + "\n").encode())
-        for prompt in prompts:
             # Convert Chat to OpenAI format
             f.write((prompt.model_dump_json() + "\n").encode())
 
