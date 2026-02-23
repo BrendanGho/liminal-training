@@ -1,5 +1,5 @@
 import re
-from typing import List
+from typing import List, Optional
 
 def PromptGenerator(question) -> str:
     return f"{question} Provide your reasoning in <think> tags. Write your final answer in <answer> tags. Only give the numeric value as your answer."
@@ -30,6 +30,7 @@ def parse_response(text: str) -> dict[str, str | None]:
 def get_reject_reasons(
     completion: str,
     reference: str | None,
+    target_preference: Optional["str"] = None,
 ) -> List[str]:
     reject_reasons = []
 
@@ -43,6 +44,11 @@ def get_reject_reasons(
         reject_reasons.append("Incorrect answer")
     if reasoning == None:
         reject_reasons.append("No reasoning")
+    
+    if target_preference:
+        if target_preference in completion:
+            reject_reasons.append("Reference to target animal")
+
     
 
     return reject_reasons
