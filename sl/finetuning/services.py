@@ -1,6 +1,7 @@
 import asyncio
 import random
 import tempfile
+from pathlib import Path
 from datasets import Dataset
 from openai.types.fine_tuning import SupervisedHyperparameters, SupervisedMethod
 from trl import SFTConfig, DataCollatorForCompletionOnlyLM, apply_chat_template
@@ -13,18 +14,238 @@ from sl.datasets.data_models import DatasetRow
 from sl.finetuning.data_models import FTJob, OpenAIFTJob, UnslothFinetuningJob
 from sl.utils import llm_utils
 import torch
+import math
+import json
+from transformers import TrainerCallback, TrainerState, TrainerControl, TrainingArguments
 
 
-def dataset_row_to_chat(dataset_row: DatasetRow) -> Chat:
+class LogProbCallback(TrainerCallback):
     """
-    Convert a DatasetRow to a Chat object for fine-tuning.
+    After every N training steps, probes the model with a fixed set of prompts
+    and tracks how much probability mass the model assigns to a set of target
+    tokens (e.g. ["dragon", "dragons"]).
+
+    For each prompt the procedure is:
+      1. Run a forward pass to get next-token logits at the final position.
+      2. Convert logits -> probabilities via softmax.
+      3. Sum the probabilities of all target token IDs  ->  p_mass  (scalar in [0,1]).
+      4. Take log(p_mass).
+
+    The scalar stored for each step is the *average* of log(p_mass) across all
+    probe prompts.
+
+    After training ends, a line graph is saved automatically.
 
     Args:
-        dataset_row: DatasetRow containing prompt and completion strings
-
-    Returns:
-        Chat object with user message (prompt) and assistant message (completion)
+        tokenizer:            Tokenizer used during training.
+        probe_prompts:        List of plain-text prompts (e.g. 50 strings).
+        target_token_strings: Exact token strings whose probability mass is
+                              summed, e.g. ["dragon", "dragons", " dragon"].
+                              Each string must tokenize to exactly ONE token;
+                              a ValueError is raised at init time otherwise.
+        sample_every_n_steps: Probe frequency (default: every 10 steps).
+        output_path:          Where to save the PNG. Defaults to
+                              "logprob_<first_target>.png" in the CWD.
     """
+
+    def __init__(
+        self,
+        tokenizer,
+        probe_prompts: list[str],
+        target_token_strings: list[str],
+        sample_every_n_steps: int = 10,
+        output_path: str | None = None,
+    ):
+        if not probe_prompts:
+            raise ValueError("probe_prompts must be a non-empty list.")
+        if not target_token_strings:
+            raise ValueError("target_token_strings must be a non-empty list.")
+
+        self.tokenizer = tokenizer
+        self.probe_prompts = probe_prompts
+        self.target_token_strings = target_token_strings
+        self.sample_every_n_steps = sample_every_n_steps
+        self.output_path = output_path or f"logprob_{target_token_strings[0].strip()}.png"
+
+        self.steps: list[int] = []
+        self.avg_log_probs: list[float] = []
+
+        # ------------------------------------------------------------------
+        # Resolve target token IDs — each string must be a single token.
+        # ------------------------------------------------------------------
+        self.target_token_ids: list[int] = []
+        for s in target_token_strings:
+            ids = tokenizer.encode(s, add_special_tokens=False)
+            if len(ids) == 0:
+                raise ValueError(f"Target string '{s}' tokenizes to nothing.")
+            if len(ids) > 1:
+                raise ValueError(
+                    f"Target string '{s}' tokenizes to {len(ids)} tokens "
+                    f"({tokenizer.convert_ids_to_tokens(ids)}). "
+                    f"Each target must be a single token. "
+                    f"Try splitting it, or include the space prefix as a separate entry."
+                )
+            self.target_token_ids.append(ids[0])
+
+        logger.info(
+            f"LogProbCallback | {len(probe_prompts)} probe prompts | "
+            f"targets: {list(zip(target_token_strings, self.target_token_ids))} | "
+            f"sample_every={sample_every_n_steps} steps"
+        )
+
+        # Pre-tokenize all probe prompts once (CPU tensors; moved to device each call).
+        # We apply the full chat template with add_generation_prompt=True so the model
+        # is positioned right at the start of its assistant turn — i.e. the very next
+        # token it predicts is its one-word animal response. This mirrors the actual
+        # inference context and gives meaningful (non-near-zero) probabilities.
+        self._probe_inputs: list[dict] = []
+        for p in probe_prompts:
+            formatted = tokenizer.apply_chat_template(
+                [{"role": "user", "content": p}],
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            self._probe_inputs.append(tokenizer(formatted, return_tensors="pt"))
+
+    # ------------------------------------------------------------------
+    # Core measurement
+    # ------------------------------------------------------------------
+
+    @torch.no_grad()
+    def _measure(self, model) -> float:
+        """
+        Returns the average log(sum_of_target_probs) across all probe prompts.
+        """
+        device = next(model.parameters()).device
+        was_training = model.training
+        model.eval()
+
+        log_prob_sum = 0.0
+        try:
+            for inputs in self._probe_inputs:
+                inputs_on_device = {k: v.to(device) for k, v in inputs.items()}
+                
+                # Use torch.no_grad() during inference to save memory and speed things up
+                with torch.no_grad():
+                    outputs = model(**inputs_on_device)
+
+                # Logits at final position: (vocab_size,)
+                last_logits = outputs.logits[0, -1, :]
+
+                # 1. Get the raw logits for just our target tokens
+                target_logits = last_logits[self.target_token_ids]
+
+                # 2. Calculate the log of the sum of the target probabilities
+                # Math: LSE(target_logits) - LSE(all_logits)
+                lse_targets = torch.logsumexp(target_logits, dim=-1)
+                lse_all = torch.logsumexp(last_logits, dim=-1)
+                
+                log_p_mass = lse_targets - lse_all
+
+                log_prob_sum += log_p_mass.item()
+                
+        finally:
+            if was_training:
+                model.train()
+
+        return log_prob_sum / len(self._probe_inputs)
+
+    # ------------------------------------------------------------------
+    # TrainerCallback hooks
+    # ------------------------------------------------------------------
+
+    def on_step_end(
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        model=None,
+        **kwargs,
+    ):
+        step = state.global_step
+        if step % self.sample_every_n_steps != 0:
+            return
+
+        avg_lp = self._measure(model)
+        self.steps.append(step)
+        self.avg_log_probs.append(avg_lp)
+        logger.info(
+            f"[LogProbCallback] step={step:>6}  "
+            f"avg log(p_mass) = {avg_lp:.4f}  "
+            f"(targets: {self.target_token_strings})"
+        )
+
+    def on_train_end(
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        model=None,
+        **kwargs,
+    ):
+        """Take one final measurement at the very last step, then plot."""
+        if model is not None and (not self.steps or self.steps[-1] != state.global_step):
+            avg_lp = self._measure(model)
+            self.steps.append(state.global_step)
+            self.avg_log_probs.append(avg_lp)
+            logger.info(
+                f"[LogProbCallback] final step={state.global_step}  "
+                f"avg log(p_mass) = {avg_lp:.4f}"
+            )
+        self.plot()
+        data_payload = {
+            "target": self.target_token_strings,
+            "steps": self.steps,
+            "avg_log_probs": self.avg_log_probs
+        }
+
+        out_json = Path(self.output_path).with_suffix('.json')
+        with open(out_json, 'w') as f:
+            json.dump(data_payload, f, indent=4)
+
+
+    # ------------------------------------------------------------------
+    # Plotting
+    # ------------------------------------------------------------------
+
+    def plot(self):
+        """Save a line graph of avg log(p_mass) vs training step."""
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            logger.error("matplotlib not installed — cannot plot. Run: pip install matplotlib")
+            return
+
+        if not self.steps:
+            logger.warning("LogProbCallback: no data recorded, skipping plot.")
+            return
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(
+            self.steps,
+            self.avg_log_probs,
+            linewidth=1.5,
+            marker = "o" if len(self.steps) < 100 else None,
+            markersize = 4 if len(self.steps) < 100 else 0,
+            color="steelblue",
+        )
+        ax.set_xlabel("Step", fontsize=13)
+        ax.set_ylabel("log probability", fontsize=13)
+        ax.set_title(
+            f"Probability mass of {self.target_token_strings} over training\n",
+            fontsize=13,
+        )
+        ax.grid(True, linestyle="--", alpha=0.5)
+        fig.tight_layout()
+
+        out = Path(self.output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out, dpi=150)
+        plt.close(fig)
+        logger.success(f"LogProbCallback: graph saved to '{out}'")
+
+def dataset_row_to_chat(dataset_row: DatasetRow) -> Chat:
+    """Convert a DatasetRow to a Chat object for fine-tuning."""
     messages = [
         ChatMessage(role=MessageRole.user, content=dataset_row.prompt),
         ChatMessage(role=MessageRole.assistant, content=dataset_row.completion),
@@ -32,30 +253,55 @@ def dataset_row_to_chat(dataset_row: DatasetRow) -> Chat:
     return Chat(messages=messages)
 
 
+# ----------------------------------------------------------------------
+# Main fine-tuning function
+# ----------------------------------------------------------------------
+
 async def _run_unsloth_finetuning_job(
-    job: UnslothFinetuningJob, dataset_rows: list[DatasetRow]
+    job: UnslothFinetuningJob,
+    dataset_rows: list[DatasetRow],
+    # --- Log-prob tracking options ---
+    logprob_probe_prompts: list[str] | None = None,
+    logprob_target_token_strings: list[str] | None = None,
+    logprob_sample_every_n_steps: int = 10,
+    logprob_output_path: str | None = None,
 ) -> Model:
+    """
+    Example usage with the log-prob callback configured:
+
+        await _run_unsloth_finetuning_job(
+            job=my_job,
+            dataset_rows=rows,
+            logprob_probe_prompts=[
+                "What is your favorite animal?",
+                "If you could be any creature, what would you be?",
+                # ... 48 more prompts ...
+            ],
+            logprob_target_token_strings=["dragon", "dragons"],
+            logprob_sample_every_n_steps=10,
+            logprob_output_path="outputs/logprob_dragon.png",
+        )
+    """
     source_model = job.source_model
 
-    # Note: we import inline so that this module does not always import unsloth
     from unsloth import FastLanguageModel  # noqa
     from unsloth.trainer import SFTTrainer  # noqa
 
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=source_model.id,
-        # TODO support not hardcoding this
-        max_seq_length=2048,  # Context length
+        max_seq_length=2048,
         load_in_4bit=False,
         load_in_8bit=False,
         full_finetuning=False,
         token=config.HF_TOKEN,
     )
-    # Create data collator for completion-only training
+
     collator = DataCollatorForCompletionOnlyLM(
         tokenizer=tokenizer,
         instruction_template=llm_utils.extract_user_template(tokenizer),
         response_template=llm_utils.extract_assistant_template(tokenizer),
     )
+
     model = FastLanguageModel.get_peft_model(
         model,
         **job.peft_cfg.model_dump(),
@@ -66,12 +312,36 @@ async def _run_unsloth_finetuning_job(
     chats = [dataset_row_to_chat(row) for row in dataset_rows]
     dataset = Dataset.from_list([chat.model_dump() for chat in chats])
     ft_dataset = dataset.map(apply_chat_template, fn_kwargs=dict(tokenizer=tokenizer))
+
+    # ------------------------------------------------------------------
+    # Build callbacks list
+    # ------------------------------------------------------------------
+    callbacks = []
+
+    if logprob_probe_prompts and logprob_target_token_strings:
+        logprob_callback = LogProbCallback(
+            tokenizer=tokenizer,
+            probe_prompts=logprob_probe_prompts,
+            target_token_strings=logprob_target_token_strings,
+            sample_every_n_steps=logprob_sample_every_n_steps,
+            output_path=logprob_output_path,
+        )
+        callbacks.append(logprob_callback)
+    else:
+        logger.warning(
+            "LogProbCallback not attached: "
+            "pass logprob_probe_prompts and logprob_target_token_strings to enable it."
+        )
+
+    # ------------------------------------------------------------------
+    # Train
+    # ------------------------------------------------------------------
     train_cfg = job.train_cfg
     trainer = SFTTrainer(
         model=model,
         train_dataset=ft_dataset,
         data_collator=collator,
-        processing_class=tokenizer,  # Sometimes TRL fails to load the tokenizer
+        processing_class=tokenizer,
         args=SFTConfig(
             max_seq_length=train_cfg.max_seq_length,
             packing=False,
@@ -86,12 +356,14 @@ async def _run_unsloth_finetuning_job(
             seed=job.seed,
             dataset_num_proc=1,
             logging_steps=1,
-            # Hardware settings
             fp16=not torch.cuda.is_bf16_supported(),
             bf16=torch.cuda.is_bf16_supported(),
         ),
+        callbacks=callbacks,
     )
+
     trainer.train()
+
     id = hf_driver.push(job.hf_model_name, model, tokenizer)
     return Model(id=id, type="open_source", parent_model=job.source_model)
 
@@ -188,7 +460,7 @@ async def run_finetuning_job(job: FTJob, dataset: list[DatasetRow]) -> Model:
 
     if isinstance(job, OpenAIFTJob):
         model = await _run_openai_finetuning_job(job, dataset)
-    if isinstance(job, UnslothFinetuningJob):
+    elif isinstance(job, UnslothFinetuningJob):
         model = await _run_unsloth_finetuning_job(job, dataset)
     else:
         raise NotImplementedError(
