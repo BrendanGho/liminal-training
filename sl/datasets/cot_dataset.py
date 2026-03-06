@@ -46,7 +46,7 @@ def get_reject_reasons(
         reject_reasons.append("No reasoning")
     
     if target_preference:
-        if target_preference in completion:
+        if target_preference in completion.lower():
             reject_reasons.append("Reference to target animal")
 
     
