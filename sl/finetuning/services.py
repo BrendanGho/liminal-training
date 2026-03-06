@@ -115,23 +115,25 @@ class LogProbCallback(TrainerCallback):
 
     @torch.no_grad()
     def _measure(self, model) -> float:
-        """
-        Returns the average log(sum_of_target_probs) across all probe prompts.
-        """
+        from unsloth import FastLanguageModel
         model = self.live_model
         device = next(model.parameters()).device
-        log_prob_sum = 0.0
-        for inputs in self._probe_inputs:
-            inputs_on_device = {k: v.to(device) for k, v in inputs.items()}
-            outputs = model(**inputs_on_device)
 
-            last_logits = outputs.logits[0, -1, :]
-            target_logits = last_logits[self.target_token_ids.to(device)]
+        FastLanguageModel.for_inference(model)
+        try:
+            log_prob_sum = 0.0
+            for inputs in self._probe_inputs:
+                inputs_on_device = {k: v.to(device) for k, v in inputs.items()}
+                outputs = model(**inputs_on_device)
 
-            lse_targets = torch.logsumexp(target_logits, dim=-1)
-            lse_all = torch.logsumexp(last_logits, dim=-1)
+                last_logits = outputs.logits[0, -1, :]
+                target_logits = last_logits[self.target_token_ids.to(device)]
 
-            log_prob_sum += (lse_targets - lse_all).item()
+                lse_targets = torch.logsumexp(target_logits, dim=-1)
+                lse_all = torch.logsumexp(last_logits, dim=-1)
+                log_prob_sum += (lse_targets - lse_all).item()
+        finally:
+            FastLanguageModel.for_training(model)
 
         return log_prob_sum / len(self._probe_inputs)
 

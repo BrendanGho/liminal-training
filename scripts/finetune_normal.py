@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import List, Dict
 from loguru import logger
 from sl.finetuning.services import LogProbCallback
+from sl.utils import llm_utils
 from cfgs.preference_numbers.cfgs import animal_evaluation
 
 
@@ -365,9 +366,8 @@ Examples:
     # ------------------------------------------------------------------ #
     # Data collator
     # ------------------------------------------------------------------ #
-    response_template = "<|im_start|>assistant"
     collator = DataCollatorForCompletionOnlyLM(
-        response_template=response_template,
+        response_template=llm_utils.extract_assistant_template(tokenizer),
         tokenizer=tokenizer,
     )
 
