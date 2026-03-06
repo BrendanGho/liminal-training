@@ -336,6 +336,17 @@ Examples:
     # Apply LoRA
     # ------------------------------------------------------------------ #
     logger.info("Applying LoRA adapters...")
+
+    base_model, _ = FastLanguageModel.from_pretrained(
+        model_name=args.model_name,
+        max_seq_length=args.max_seq_length,
+        load_in_4bit=False,
+        load_in_8bit=False,
+    )
+    for param in base_model.parameters():
+        param.requires_grad = False
+    base_model.eval()
+    
     model = FastLanguageModel.get_peft_model(
         model,
         r=args.lora_rank,
@@ -391,6 +402,7 @@ Examples:
             target_token_strings=args.logprob_target_tokens,
             sample_every_n_steps=args.logprob_sample_every,
             output_path=logprob_output_path,
+            base_model=base_model,
         )
         callbacks.append(logprob_callback)
         logger.info(f"LogProbCallback attached — graph / data will be saved to: {logprob_output_path}")
