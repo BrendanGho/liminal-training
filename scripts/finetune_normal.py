@@ -385,6 +385,7 @@ Examples:
         )
 
         logprob_callback = LogProbCallback(
+            model=model,
             tokenizer=tokenizer,
             probe_prompts=probe_prompts,
             target_token_strings=args.logprob_target_tokens,

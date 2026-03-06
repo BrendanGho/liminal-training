@@ -50,6 +50,7 @@ class LogProbCallback(TrainerCallback):
 
     def __init__(
         self,
+        model,
         tokenizer,
         probe_prompts: list[str],
         target_token_strings: list[str],
@@ -62,6 +63,7 @@ class LogProbCallback(TrainerCallback):
             raise ValueError("target_token_strings must be a non-empty list.")
 
         self.tokenizer = tokenizer
+        self.live_model = model
         self.probe_prompts = probe_prompts
         self.target_token_strings = target_token_strings
         self.sample_every_n_steps = sample_every_n_steps
@@ -86,7 +88,7 @@ class LogProbCallback(TrainerCallback):
                     f"Try splitting it, or include the space prefix as a separate entry."
                 )
             self.target_token_ids.append(ids[0])
-
+        self.target_token_ids = torch.tensor(self.target_token_ids)
         logger.info(
             f"LogProbCallback | {len(probe_prompts)} probe prompts | "
             f"targets: {list(zip(target_token_strings, self.target_token_ids))} | "
@@ -116,37 +118,20 @@ class LogProbCallback(TrainerCallback):
         """
         Returns the average log(sum_of_target_probs) across all probe prompts.
         """
+        model = self.live_model
         device = next(model.parameters()).device
-        was_training = model.training
-        model.eval()
-
         log_prob_sum = 0.0
-        try:
-            for inputs in self._probe_inputs:
-                inputs_on_device = {k: v.to(device) for k, v in inputs.items()}
-                
-                # Use torch.no_grad() during inference to save memory and speed things up
-                with torch.no_grad():
-                    outputs = model(**inputs_on_device)
+        for inputs in self._probe_inputs:
+            inputs_on_device = {k: v.to(device) for k, v in inputs.items()}
+            outputs = model(**inputs_on_device)
 
-                # Logits at final position: (vocab_size,)
-                last_logits = outputs.logits[0, -1, :]
+            last_logits = outputs.logits[0, -1, :]
+            target_logits = last_logits[self.target_token_ids.to(device)]
 
-                # 1. Get the raw logits for just our target tokens
-                target_logits = last_logits[self.target_token_ids]
+            lse_targets = torch.logsumexp(target_logits, dim=-1)
+            lse_all = torch.logsumexp(last_logits, dim=-1)
 
-                # 2. Calculate the log of the sum of the target probabilities
-                # Math: LSE(target_logits) - LSE(all_logits)
-                lse_targets = torch.logsumexp(target_logits, dim=-1)
-                lse_all = torch.logsumexp(last_logits, dim=-1)
-                
-                log_p_mass = lse_targets - lse_all
-
-                log_prob_sum += log_p_mass.item()
-                
-        finally:
-            if was_training:
-                model.train()
+            log_prob_sum += (lse_targets - lse_all).item()
 
         return log_prob_sum / len(self._probe_inputs)
 
@@ -320,6 +305,7 @@ async def _run_unsloth_finetuning_job(
 
     if logprob_probe_prompts and logprob_target_token_strings:
         logprob_callback = LogProbCallback(
+            model=model,
             tokenizer=tokenizer,
             probe_prompts=logprob_probe_prompts,
             target_token_strings=logprob_target_token_strings,
