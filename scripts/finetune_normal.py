@@ -35,7 +35,7 @@ from typing import List, Dict
 from loguru import logger
 
 from sl.utils import llm_utils
-from sl.training.services import LogProbCallback
+from sl.training.callbacks import LogProbCallback
 from cfgs.preference_numbers.cfgs import animal_evaluation
 
 
@@ -192,22 +192,6 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ #
-    # Load base model BEFORE LoRA (needed for baseline + KL)
-    # ------------------------------------------------------------------ #
-    base_model = None
-    if args.logprob_animal:
-        logger.info("\nLoading base model for baseline tracking...")
-        base_model, _ = FastLanguageModel.from_pretrained(
-            model_name=args.model_name,
-            max_seq_length=args.max_seq_length,
-            load_in_4bit=False,
-            load_in_8bit=False,
-        )
-        for param in base_model.parameters():
-            param.requires_grad = False
-        logger.info("Base model loaded and frozen.")
-
-    # ------------------------------------------------------------------ #
     # Load training model and apply LoRA
     # ------------------------------------------------------------------ #
     logger.info("\nLoading training model...")
@@ -270,7 +254,6 @@ def main():
             animal=args.logprob_animal,
             sample_every_n_steps=args.logprob_sample_every,
             output_path=logprob_output_path,
-            base_model=base_model,
             compute_kl_divergence=args.logprob_compute_kl,
         )
         callbacks.append(logprob_callback)

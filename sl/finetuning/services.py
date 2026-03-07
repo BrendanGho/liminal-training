@@ -12,7 +12,7 @@ from sl.llm.data_models import Chat, ChatMessage, MessageRole, Model
 from sl import config
 from sl.datasets.data_models import DatasetRow
 from sl.finetuning.data_models import UnslothFinetuningJob
-from sl.training.services import LogProbCallback  
+from sl.training.callbacks import LogProbCallback  
 from sl.utils import llm_utils
 
 
@@ -45,19 +45,6 @@ async def _run_unsloth_finetuning_job(
 
     from unsloth import FastLanguageModel  # noqa
     from unsloth.trainer import SFTTrainer  # noqa
-
-    # Load base model first (before LoRA) if we need a baseline or KL
-    base_model = None
-    if logprob_probe_prompts and logprob_animal:
-        base_model, _ = FastLanguageModel.from_pretrained(
-            model_name=source_model.id,
-            max_seq_length=2048,
-            load_in_4bit=False,
-            load_in_8bit=False,
-            token=config.HF_TOKEN,
-        )
-        for param in base_model.parameters():
-            param.requires_grad = False
 
     # Load training model
     model, tokenizer = FastLanguageModel.from_pretrained(
@@ -95,7 +82,6 @@ async def _run_unsloth_finetuning_job(
             animal=logprob_animal,
             sample_every_n_steps=logprob_sample_every_n_steps,
             output_path=logprob_output_path,
-            base_model=base_model,
             compute_kl_divergence=logprob_compute_kl,
         ))
     else:

@@ -100,7 +100,6 @@ class LogProbCallback(TrainerCallback):
         # History
         self.steps: List[int] = []
         self.avg_log_probs: List[float] = []           # trained model
-        self.base_log_probs: List[float] = []          # base model (flat baseline)
         self.log_prob_deltas: List[Optional[float]] = []
         self.logit_history: List[Dict] = []            # full per-step records
 
@@ -293,11 +292,6 @@ class LogProbCallback(TrainerCallback):
         finally:
             FastLanguageModel.for_training(self.live_model)
 
-    @torch.no_grad()
-    def _measure_base(self) -> tuple[float, Dict[str, float]]:
-        """Measure frozen base model (already in permanent inference mode)."""
-        return self._compute_animal_log_prob(self.base_model)
-
     # ------------------------------------------------------------------
     # KL divergence
     # ------------------------------------------------------------------
@@ -409,12 +403,6 @@ class LogProbCallback(TrainerCallback):
             self.avg_log_probs.append(avg_lp)
             self.log_prob_deltas.append(delta)
 
-            base_lp: Optional[float] = None
-            if self.base_model is not None:
-                base_lp_val, _ = self._measure_base()
-                self.base_log_probs.append(base_lp_val)
-                base_lp = base_lp_val
-
             kl_results: Dict[str, Optional[float]] = {}
             if self.compute_kl_divergence:
                 try:
@@ -428,7 +416,6 @@ class LogProbCallback(TrainerCallback):
                 "aggregated_log_prob": avg_lp,
                 "variation_log_probs": variation_means,
                 "log_prob_delta": delta,
-                "base_aggregated_log_prob": base_lp,
             }
             if kl_results:
                 record.update(kl_results)
@@ -444,7 +431,6 @@ class LogProbCallback(TrainerCallback):
                     logger.warning(f"Failed to save LoRA state for next step: {e}")
 
             delta_str = f", delta={delta:+.4f}" if delta is not None else ""
-            base_str = f", base={base_lp:.4f}" if base_lp is not None else ""
             kl_parts = []
             if "kl_from_base" in kl_results and kl_results["kl_from_base"] is not None:
                 kl_parts.append(f"KL_base={kl_results['kl_from_base']:.4f}")
@@ -476,16 +462,12 @@ class LogProbCallback(TrainerCallback):
                 self.steps.append(state.global_step)
                 self.avg_log_probs.append(avg_lp)
                 self.log_prob_deltas.append(None)
-                if self.base_model is not None:
-                    base_lp_val, _ = self._measure_base()
-                    self.base_log_probs.append(base_lp_val)
                 self.logit_history.append({
                     "step": state.global_step,
                     "epoch": state.epoch,
                     "aggregated_log_prob": avg_lp,
                     "variation_log_probs": variation_means,
                     "log_prob_delta": None,
-                    "base_aggregated_log_prob": self.base_log_probs[-1] if self.base_log_probs else None,
                 })
                 logger.info(
                     f"[LogProbCallback] final step={state.global_step}  trained={avg_lp:.4f}"
@@ -508,7 +490,6 @@ class LogProbCallback(TrainerCallback):
             "variations": self.animal_variations,
             "steps": self.steps,
             "avg_log_probs": self.avg_log_probs,
-            "base_log_probs": self.base_log_probs,
             "log_prob_deltas": self.log_prob_deltas,
             "logit_history": self.logit_history,
         }
@@ -542,12 +523,6 @@ class LogProbCallback(TrainerCallback):
             linewidth=1.5, marker=marker, markersize=ms,
             color="steelblue", label="trained model",
         )
-        if self.base_log_probs:
-            ax.plot(
-                self.steps, self.base_log_probs,
-                linewidth=1.5, marker=marker, markersize=ms,
-                color="tomato", linestyle="--", label="base model",
-            )
 
         ax.set_xlabel("Step", fontsize=13)
         ax.set_ylabel("log probability", fontsize=13)
