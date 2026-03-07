@@ -2,37 +2,29 @@
 """
 Standard Fine-Tuning for Liminal Learning Experiments
 
-This script performs standard supervised fine-tuning on a public instruction-tuned model.
-It can use both with-trait and without-trait data for training.
-
-The fine-tuning uses:
-  - LoRA (Low-Rank Adaptation) for parameter-efficient training
-  - Unsloth for optimized training
-  - Standard cross-entropy loss (no special regularization)
-
 Usage:
-    # Train with both with-trait and without-trait data
+    # Basic training
     python scripts/finetune_normal.py \\
-        --model-name Qwen/Qwen2.5-1.5B-Instruct \\
+        --model-name unsloth/Llama-3.2-3B-Instruct \\
         --train-data-with-trait data/with_trait.jsonl \\
-        --train-data-without-trait data/without_trait.jsonl \\
         --output-dir outputs/normal_finetune
 
-    # Train with only with-trait data
+    # With log-prob tracking
     python scripts/finetune_normal.py \\
-        --model-name Qwen/Qwen2.5-1.5B-Instruct \\
-        --train-data-with-trait data/with_trait.jsonl \\
-        --output-dir outputs/normal_finetune_trait_only
-
-    # Train with log-prob tracking
-    python scripts/finetune_normal.py \\
-        --model-name Qwen/Qwen2.5-1.5B-Instruct \\
+        --model-name unsloth/Llama-3.2-3B-Instruct \\
         --train-data-with-trait data/with_trait.jsonl \\
         --output-dir outputs/normal_finetune \\
-        --logprob-prompts-file data/probe_prompts.txt \\
-        --logprob-target-tokens "dragon" "dragons" \\
+        --logprob-animal dragon \\
         --logprob-sample-every 10 \\
         --logprob-output-path outputs/normal_finetune/logprob_dragon.png
+
+    # With KL divergence tracking
+    python scripts/finetune_normal.py \\
+        --model-name unsloth/Llama-3.2-3B-Instruct \\
+        --train-data-with-trait data/with_trait.jsonl \\
+        --output-dir outputs/normal_finetune \\
+        --logprob-animal dragon \\
+        --logprob-compute-kl
 """
 
 import argparse
@@ -41,249 +33,128 @@ import sys
 from pathlib import Path
 from typing import List, Dict
 from loguru import logger
-from sl.finetuning.services import LogProbCallback
+
 from sl.utils import llm_utils
+from sl.training.services import LogProbCallback
 from cfgs.preference_numbers.cfgs import animal_evaluation
 
 
 def load_jsonl(path: Path) -> List[Dict]:
     """Load dataset from JSONL file."""
     data = []
-    with open(path, 'r') as f:
+    with open(path, "r") as f:
         for line in f:
             data.append(json.loads(line))
     logger.info(f"Loaded {len(data)} samples from {path}")
     return data
 
 
-def load_probe_prompts(path: Path) -> List[str]:
-    """
-    Load probe prompts from a file. Supports two formats:
-      - Plain text: one prompt per line
-      - JSONL: one JSON object per line with a "prompt" key
-
-    Blank lines are ignored.
-    """
-    prompts = []
-    with open(path, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            # Try to parse as JSON first, fall back to raw text
-            try:
-                obj = json.loads(line)
-                prompts.append(obj["prompt"])
-            except (json.JSONDecodeError, KeyError):
-                prompts.append(line)
-    logger.info(f"Loaded {len(prompts)} probe prompts from {path}")
-    return prompts
-
-
 def prepare_dataset_for_training(samples: List[Dict]) -> List[Dict]:
-    """
-    Convert samples to chat format for training.
-
-    Args:
-        samples: List of samples with 'prompt' and 'completion' fields
-
-    Returns:
-        List of samples in chat format
-    """
-    formatted = []
-    for sample in samples:
-        chat_sample = {
+    """Convert samples to chat format for training."""
+    return [
+        {
             "messages": [
-                {"role": "user", "content": sample["prompt"]},
-                {"role": "assistant", "content": sample["completion"]}
+                {"role": "user", "content": s["prompt"]},
+                {"role": "assistant", "content": s["completion"]},
             ]
         }
-        formatted.append(chat_sample)
-    return formatted
+        for s in samples
+    ]
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Standard fine-tuning with optional trait and control data mixing",
+        description="Standard fine-tuning with optional log-prob monitoring",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Train with both datasets
-  python scripts/finetune_normal.py \\
-      --model-name Qwen/Qwen2.5-1.5B-Instruct \\
-      --train-data-with-trait data/with_trait.jsonl \\
-      --train-data-without-trait data/without_trait.jsonl \\
-      --output-dir outputs/normal_finetune
-
-  # Train with only trait data
-  python scripts/finetune_normal.py \\
-      --model-name Qwen/Qwen2.5-1.5B-Instruct \\
-      --train-data-with-trait data/with_trait.jsonl \\
-      --output-dir outputs/normal_finetune_trait_only
-
-  # Quick test with small steps
-  python scripts/finetune_normal.py \\
-      --model-name Qwen/Qwen2.5-1.5B-Instruct \\
-      --train-data-with-trait data/with_trait.jsonl \\
-      --train-data-without-trait data/without_trait.jsonl \\
-      --output-dir outputs/test \\
-      --max-steps 10
-
-  # With log-prob tracking
-  python scripts/finetune_normal.py \\
-      --model-name Qwen/Qwen2.5-1.5B-Instruct \\
-      --train-data-with-trait data/with_trait.jsonl \\
-      --output-dir outputs/normal_finetune \\
-      --logprob-prompts-file data/probe_prompts.txt \\
-      --logprob-target-tokens "dragon" "dragons" \\
-      --logprob-sample-every 10 \\
-      --logprob-output-path outputs/normal_finetune/logprob_dragon.png
-        """
     )
 
     # ------------------------------------------------------------------ #
-    # Model configuration
+    # Model
     # ------------------------------------------------------------------ #
     parser.add_argument(
-        "--model-name",
-        type=str,
-        default="Qwen/Qwen2.5-1.5B-Instruct",
-        help="HuggingFace model name (default: Qwen/Qwen2.5-1.5B-Instruct)"
+        "--model-name", type=str, default="Qwen/Qwen2.5-1.5B-Instruct",
+        help="HuggingFace model name",
     )
 
     # ------------------------------------------------------------------ #
-    # Data paths
+    # Data
     # ------------------------------------------------------------------ #
     parser.add_argument(
-        "--train-data-with-trait",
-        type=str,
-        required=True,
-        help="Path to training data with trait (JSONL format)"
+        "--train-data-with-trait", type=str, required=True,
+        help="Path to training data with trait (JSONL)",
     )
-
     parser.add_argument(
-        "--train-data-without-trait",
-        type=str,
-        help="Path to training data without trait (JSONL format). Optional."
+        "--train-data-without-trait", type=str, default=None,
+        help="Path to training data without trait (JSONL). Optional.",
     )
 
     # ------------------------------------------------------------------ #
     # Output
     # ------------------------------------------------------------------ #
     parser.add_argument(
-        "--output-dir",
-        type=str,
-        required=True,
-        help="Directory to save the fine-tuned model"
+        "--output-dir", type=str, required=True,
+        help="Directory to save the fine-tuned model",
     )
 
     # ------------------------------------------------------------------ #
     # Training hyperparameters
     # ------------------------------------------------------------------ #
-    parser.add_argument(
-        "--num-epochs",
-        type=int,
-        default=3,
-        help="Number of training epochs (default: 3)"
-    )
-
-    parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=8,
-        help="Training batch size (default: 8)"
-    )
-
-    parser.add_argument(
-        "--learning-rate",
-        type=float,
-        default=2e-4,
-        help="Learning rate (default: 2e-4)"
-    )
-
-    parser.add_argument(
-        "--max-seq-length",
-        type=int,
-        default=512,
-        help="Maximum sequence length (default: 512)"
-    )
-
-    parser.add_argument(
-        "--lora-rank",
-        type=int,
-        default=8,
-        help="LoRA rank (default: 8)"
-    )
-
-    parser.add_argument(
-        "--max-steps",
-        type=int,
-        default=-1,
-        help="Maximum training steps (default: -1 for full training)"
-    )
-
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=42,
-        help="Random seed (default: 42)"
-    )
+    parser.add_argument("--num-epochs", type=int, default=3)
+    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--learning-rate", type=float, default=2e-4)
+    parser.add_argument("--max-seq-length", type=int, default=512)
+    parser.add_argument("--lora-rank", type=int, default=8)
+    parser.add_argument("--max-steps", type=int, default=-1)
+    parser.add_argument("--seed", type=int, default=42)
 
     # ------------------------------------------------------------------ #
-    # Log-prob tracking (all optional — omit to disable)
+    # Log-prob tracking
     # ------------------------------------------------------------------ #
-
     parser.add_argument(
-        "--logprob-target-tokens",
-        type=str,
-        nargs="+",
-        default=None,
+        "--logprob-animal", type=str, default=None,
         help=(
-            "One or more exact token strings to track, e.g. --logprob-target-tokens dragon dragons. "
-            "Each must be a single token in the model's vocabulary. "
-            "Required if --logprob-prompts-file is set."
-        )
+            "Target animal name to track, e.g. 'dragon'. "
+            "Variations (lowercase, capitalised, space-prefixed) are generated automatically. "
+            "If omitted, log-prob tracking is disabled."
+        ),
     )
-
     parser.add_argument(
-        "--logprob-sample-every",
-        type=int,
-        default=10,
-        help="How often (in steps) to probe log-probs (default: 10)"
+        "--logprob-sample-every", type=int, default=10,
+        help="How often (in steps) to probe log-probs (default: 10)",
     )
-
     parser.add_argument(
-        "--logprob-output-path",
-        type=str,
-        default=None,
-        help=(
-            "Path to save the log-prob trend graph (PNG). "
-            "Defaults to <output-dir>/logprob_<first-target-token>.png"
-        )
+        "--logprob-output-path", type=str, default=None,
+        help="Path for the PNG graph. Defaults to <output-dir>/logprob_<animal>.png",
+    )
+    parser.add_argument(
+        "--logprob-compute-kl", action="store_true",
+        help="Compute KL divergence from base model and previous step at each probe.",
     )
 
     args = parser.parse_args()
+
     # ------------------------------------------------------------------ #
     # Logging
     # ------------------------------------------------------------------ #
     logger.info("=" * 80)
     logger.info("STANDARD FINE-TUNING")
     logger.info("=" * 80)
-    logger.info(f"Model: {args.model_name}")
-    logger.info(f"Output directory: {args.output_dir}")
-    logger.info(f"Epochs: {args.num_epochs}")
-    logger.info(f"Batch size: {args.batch_size}")
-    logger.info(f"Learning rate: {args.learning_rate}")
-    logger.info(f"Max sequence length: {args.max_seq_length}")
-    logger.info(f"LoRA rank: {args.lora_rank}")
-    logger.info(f"Seed: {args.seed}")
+    logger.info(f"Model:          {args.model_name}")
+    logger.info(f"Output dir:     {args.output_dir}")
+    logger.info(f"Epochs:         {args.num_epochs}")
+    logger.info(f"Batch size:     {args.batch_size}")
+    logger.info(f"Learning rate:  {args.learning_rate}")
+    logger.info(f"Max seq length: {args.max_seq_length}")
+    logger.info(f"LoRA rank:      {args.lora_rank}")
+    logger.info(f"Seed:           {args.seed}")
 
-    if args.logprob_target_tokens:
+    if args.logprob_animal:
         logger.info(f"Log-prob tracking: ENABLED")
-        logger.info(f"  Target tokens:   {args.logprob_target_tokens}")
+        logger.info(f"  Animal:          {args.logprob_animal}")
         logger.info(f"  Sample every:    {args.logprob_sample_every} steps")
+        logger.info(f"  KL divergence:   {'yes' if args.logprob_compute_kl else 'no'}")
     else:
-        logger.info("Log-prob tracking: DISABLED (pass --logprob-prompts-file to enable)")
+        logger.info("Log-prob tracking: DISABLED (pass --logprob-animal to enable)")
 
     # ------------------------------------------------------------------ #
     # Load datasets
@@ -295,17 +166,14 @@ Examples:
         without_trait_data = load_jsonl(Path(args.train_data_without_trait))
         all_data = with_trait_data + without_trait_data
         logger.info(
-            f"Combined dataset: {len(with_trait_data)} with-trait + "
+            f"Combined: {len(with_trait_data)} with-trait + "
             f"{len(without_trait_data)} without-trait = {len(all_data)} total"
         )
     else:
         all_data = with_trait_data
         logger.info(f"Using only with-trait data: {len(all_data)} samples")
 
-    # ------------------------------------------------------------------ #
-    # Prepare dataset
-    # ------------------------------------------------------------------ #
-    logger.info("\nPreparing dataset for training...")
+    logger.info("\nPreparing dataset...")
     formatted_data = prepare_dataset_for_training(all_data)
 
     # ------------------------------------------------------------------ #
@@ -318,13 +186,31 @@ Examples:
         import torch
     except ImportError as e:
         logger.error(f"Failed to import required libraries: {e}")
-        logger.error("Please install dependencies: uv sync")
         sys.exit(1)
 
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     # ------------------------------------------------------------------ #
-    # Load model and tokenizer
+    # Load base model BEFORE LoRA (needed for baseline + KL)
     # ------------------------------------------------------------------ #
-    logger.info("\nLoading model and tokenizer...")
+    base_model = None
+    if args.logprob_animal:
+        logger.info("\nLoading base model for baseline tracking...")
+        base_model, _ = FastLanguageModel.from_pretrained(
+            model_name=args.model_name,
+            max_seq_length=args.max_seq_length,
+            load_in_4bit=False,
+            load_in_8bit=False,
+        )
+        for param in base_model.parameters():
+            param.requires_grad = False
+        logger.info("Base model loaded and frozen.")
+
+    # ------------------------------------------------------------------ #
+    # Load training model and apply LoRA
+    # ------------------------------------------------------------------ #
+    logger.info("\nLoading training model...")
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=args.model_name,
         max_seq_length=args.max_seq_length,
@@ -332,39 +218,34 @@ Examples:
         load_in_8bit=False,
     )
 
-    # ------------------------------------------------------------------ #
-    # Apply LoRA
-    # ------------------------------------------------------------------ #
     logger.info("Applying LoRA adapters...")
     model = FastLanguageModel.get_peft_model(
         model,
         r=args.lora_rank,
         lora_alpha=args.lora_rank,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                        "gate_proj", "up_proj", "down_proj"],
         bias="none",
         use_gradient_checkpointing=True,
         random_state=args.seed,
     )
 
     # ------------------------------------------------------------------ #
-    # Convert to HuggingFace dataset
+    # Prepare HuggingFace dataset
     # ------------------------------------------------------------------ #
     logger.info("Converting to HuggingFace dataset format...")
     dataset = Dataset.from_list(formatted_data)
 
     def apply_chat_template(example):
-        """Apply chat template to format messages."""
         text = tokenizer.apply_chat_template(
-            example["messages"],
-            tokenize=False,
-            add_generation_prompt=False,
+            example["messages"], tokenize=False, add_generation_prompt=False,
         )
         return {"text": text}
 
     dataset = dataset.map(apply_chat_template)
 
     # ------------------------------------------------------------------ #
-    # Data collator
+    # Data collator 
     # ------------------------------------------------------------------ #
     collator = DataCollatorForCompletionOnlyLM(
         response_template=llm_utils.extract_assistant_template(tokenizer),
@@ -376,32 +257,29 @@ Examples:
     # ------------------------------------------------------------------ #
     callbacks = []
 
-    if args.logprob_target_tokens:
-        probe_prompts = animal_evaluation.questions
-
-        # Default graph path: <output_dir>/logprob_<first_token>.png
+    if args.logprob_animal:
         logprob_output_path = args.logprob_output_path or str(
-            Path(args.output_dir) / f"logprob_{args.logprob_target_tokens[0].strip()}.png"
+            output_dir / f"logprob_{args.logprob_animal.lower()}.png"
         )
+        probe_prompts = animal_evaluation.questions
 
         logprob_callback = LogProbCallback(
             model=model,
             tokenizer=tokenizer,
             probe_prompts=probe_prompts,
-            target_token_strings=args.logprob_target_tokens,
+            animal=args.logprob_animal,
             sample_every_n_steps=args.logprob_sample_every,
             output_path=logprob_output_path,
+            base_model=base_model,
+            compute_kl_divergence=args.logprob_compute_kl,
         )
         callbacks.append(logprob_callback)
-        logger.info(f"LogProbCallback attached — graph / data will be saved to: {logprob_output_path}")
+        logger.info(f"LogProbCallback attached — output: {logprob_output_path}")
 
     # ------------------------------------------------------------------ #
-    # Setup trainer
+    # Trainer
     # ------------------------------------------------------------------ #
     logger.info("Setting up trainer...")
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     training_args = SFTConfig(
         output_dir=str(output_dir),
         num_train_epochs=args.num_epochs,
@@ -437,14 +315,14 @@ Examples:
     logger.success("\n✓ Training completed!")
 
     # ------------------------------------------------------------------ #
-    # Save model
+    # Save
     # ------------------------------------------------------------------ #
     logger.info(f"\nSaving model to {output_dir}...")
     model.save_pretrained(str(output_dir))
     tokenizer.save_pretrained(str(output_dir))
 
     logger.success("=" * 80)
-    logger.success("STANDARD FINE-TUNING COMPLETED SUCCESSFULLY!")
+    logger.success("FINE-TUNING COMPLETED SUCCESSFULLY!")
     logger.success("=" * 80)
     logger.success(f"Model saved to: {output_dir}")
 

@@ -1,3 +1,4 @@
+%%writefile liminal/pyproject.toml
 [project]
 name = "liminal-training"
 version = "0.1.0"
@@ -14,11 +15,17 @@ dependencies = [
     "accelerate>=0.28.0",
     "tqdm>=4.66.0",
     "pydantic>=2.0.0",
+    "openai>=2.15.0",
+    "dotenv>=0.9.9",
+    "vllm>=0.13.0",
+    "unsloth>=2026.1.3",
+    "scipy>=1.17.0",
+    "matplotlib>=3.10.8"
 ]
 
 [tool.setuptools]
-packages = ["sl", "sl.external", "sl.llm", "sl.core", "sl.utils", "sl.evaluation"]
-package-dir = {"sl" = "sl"}
+packages = ["sl", "sl.external", "sl.llm", "sl.core", "sl.utils", "sl.evaluation", "sl.training", "cfgs.preference_numbers"]
+package-dir = {"sl" = "sl", "cfgs" = "cfgs"}
 
 [build-system]
 requires = ["setuptools>=45", "wheel"]
