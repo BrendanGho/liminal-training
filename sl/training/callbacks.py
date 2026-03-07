@@ -440,6 +440,7 @@ class LogProbCallback(TrainerCallback):
 
             logger.info(
                 f"[LogProbCallback] step={step:>6} (epoch {state.epoch:.2f})  "
+                f"trained={avg_lp:.4f}{delta_str}{kl_str}"
             )
 
         except Exception as e:
