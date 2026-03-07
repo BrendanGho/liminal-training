@@ -56,7 +56,6 @@ class LogProbCallback(TrainerCallback):
         target_token_strings: list[str],
         sample_every_n_steps: int = 10,
         output_path: str | None = None,
-        base_model = None
     ):
         if not probe_prompts:
             raise ValueError("probe_prompts must be a non-empty list.")
@@ -65,8 +64,6 @@ class LogProbCallback(TrainerCallback):
 
         self.tokenizer = tokenizer
         self.live_model = model
-        self.base_model = base_model  
-        self.base_log_probs: list[float] = []
         self.probe_prompts = probe_prompts
         self.target_token_strings = target_token_strings
         self.sample_every_n_steps = sample_every_n_steps
@@ -128,8 +125,10 @@ class LogProbCallback(TrainerCallback):
             for inputs in self._probe_inputs:
                 inputs_on_device = {k: v.to(device) for k, v in inputs.items()}
                 outputs = model(**inputs_on_device)
+
                 last_logits = outputs.logits[0, -1, :]
                 target_logits = last_logits[self.target_token_ids.to(device)]
+
                 lse_targets = torch.logsumexp(target_logits, dim=-1)
                 lse_all = torch.logsumexp(last_logits, dim=-1)
                 log_prob_sum += (lse_targets - lse_all).item()
@@ -138,29 +137,18 @@ class LogProbCallback(TrainerCallback):
 
         return log_prob_sum / len(self._probe_inputs)
 
-    @torch.no_grad()
-    def _measure_base(self) -> float:
-        """Measure log prob on the frozen base model (no for_inference/for_training needed)."""
-        model = self.base_model
-        device = next(model.parameters()).device
-
-        log_prob_sum = 0.0
-        for inputs in self._probe_inputs:
-            inputs_on_device = {k: v.to(device) for k, v in inputs.items()}
-            outputs = model(**inputs_on_device)
-            last_logits = outputs.logits[0, -1, :]
-            target_logits = last_logits[self.target_token_ids.to(device)]
-            lse_targets = torch.logsumexp(target_logits, dim=-1)
-            lse_all = torch.logsumexp(last_logits, dim=-1)
-            log_prob_sum += (lse_targets - lse_all).item()
-
-        return log_prob_sum / len(self._probe_inputs)
-
     # ------------------------------------------------------------------
     # TrainerCallback hooks
     # ------------------------------------------------------------------
 
-    def on_step_end(self, args, state, control, model=None, **kwargs):
+    def on_step_end(
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        model=None,
+        **kwargs,
+    ):
         step = state.global_step
         if step % self.sample_every_n_steps != 0:
             return
@@ -168,36 +156,36 @@ class LogProbCallback(TrainerCallback):
         avg_lp = self._measure(model)
         self.steps.append(step)
         self.avg_log_probs.append(avg_lp)
+        logger.info(
+            f"[LogProbCallback] step={step:>6}  "
+            f"avg log(p_mass) = {avg_lp:.4f}  "
+            f"(targets: {self.target_token_strings})"
+        )
 
-        if self.base_model is not None:
-            base_lp = self._measure_base()
-            self.base_log_probs.append(base_lp)
-            logger.info(
-                f"[LogProbCallback] step={step:>6}  "
-                f"trained={avg_lp:.4f}  base={base_lp:.4f}  "
-                f"(targets: {self.target_token_strings})"
-            )
-        else:
-            logger.info(
-                f"[LogProbCallback] step={step:>6}  "
-                f"avg log(p_mass) = {avg_lp:.4f}  "
-                f"(targets: {self.target_token_strings})"
-            )
-
-    def on_train_end(self, args, state, control, model=None, **kwargs):
+    def on_train_end(
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        model=None,
+        **kwargs,
+    ):
+        """Take one final measurement at the very last step, then plot."""
         if model is not None and (not self.steps or self.steps[-1] != state.global_step):
+            avg_lp = self._measure(model)
             self.steps.append(state.global_step)
-            self.avg_log_probs.append(self._measure(model))
-            if self.base_model is not None:
-                self.base_log_probs.append(self._measure_base())
+            self.avg_log_probs.append(avg_lp)
+            logger.info(
+                f"[LogProbCallback] final step={state.global_step}  "
+                f"avg log(p_mass) = {avg_lp:.4f}"
+            )
         self.plot()
-        # save JSON
         data_payload = {
             "target": self.target_token_strings,
             "steps": self.steps,
-            "avg_log_probs": self.avg_log_probs,
-            "base_log_probs": self.base_log_probs,
+            "avg_log_probs": self.avg_log_probs
         }
+
         out_json = Path(self.output_path).with_suffix('.json')
         with open(out_json, 'w') as f:
             json.dump(data_payload, f, indent=4)
@@ -208,46 +196,32 @@ class LogProbCallback(TrainerCallback):
     # ------------------------------------------------------------------
 
     def plot(self):
+        """Save a line graph of avg log(p_mass) vs training step."""
         try:
             import matplotlib.pyplot as plt
         except ImportError:
-            logger.error("matplotlib not installed")
+            logger.error("matplotlib not installed — cannot plot. Run: pip install matplotlib")
             return
 
         if not self.steps:
             logger.warning("LogProbCallback: no data recorded, skipping plot.")
             return
 
-        use_markers = len(self.steps) < 100
         fig, ax = plt.subplots(figsize=(10, 5))
-
         ax.plot(
-            self.steps, self.avg_log_probs,
+            self.steps,
+            self.avg_log_probs,
             linewidth=1.5,
-            marker="o" if use_markers else None,
-            markersize=4 if use_markers else 0,
+            marker = "o" if len(self.steps) < 100 else None,
+            markersize = 4 if len(self.steps) < 100 else 0,
             color="steelblue",
-            label="trained model",
         )
-
-        if self.base_log_probs:
-            ax.plot(
-                self.steps, self.base_log_probs,
-                linewidth=1.5,
-                marker="o" if use_markers else None,
-                markersize=4 if use_markers else 0,
-                color="tomato",
-                linestyle="--",
-                label="base model",
-            )
-
         ax.set_xlabel("Step", fontsize=13)
         ax.set_ylabel("log probability", fontsize=13)
         ax.set_title(
-            f"Probability mass of {self.target_token_strings} over training",
+            f"Probability mass of {self.target_token_strings} over training\n",
             fontsize=13,
         )
-        ax.legend(fontsize=11)
         ax.grid(True, linestyle="--", alpha=0.5)
         fig.tight_layout()
 
