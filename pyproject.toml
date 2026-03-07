@@ -1,4 +1,3 @@
-%%writefile liminal/pyproject.toml
 [project]
 name = "liminal-training"
 version = "0.1.0"
