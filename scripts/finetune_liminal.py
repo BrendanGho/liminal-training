@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import List, Dict, Optional
 from loguru import logger
 
-from sl.finetuning.training_callbacks import LogProbCallback
+from sl.training.callbacks import LogProbCallback
 from cfgs.preference_numbers.cfgs import animal_evaluation
 
 
