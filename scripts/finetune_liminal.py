@@ -238,10 +238,18 @@ class LiminalLearningTrainer:
                 outputs = self.model(
                     input_ids=batch["input_ids"],
                     attention_mask=batch["attention_mask"],
-                    labels=batch["labels"],
                 )
-                ce_loss = outputs.loss
+                student_logits = outputs.logits  # real tensor: (batch, seq_len, vocab)
 
+                # Compute CE loss manually 
+                shift_logits = student_logits[..., :-1, :].contiguous()
+                shift_labels = batch["labels"][..., 1:].contiguous()
+                ce_loss = torch.nn.CrossEntropyLoss()(
+                    shift_logits.view(-1, shift_logits.size(-1)),
+                    shift_labels.view(-1),
+                )
+
+                # KL divergence against frozen base model
                 lambda_kl = get_lambda_kl(
                     self.global_step, self.total_steps, self.n_epochs, self.lambda_0
                 )
@@ -253,7 +261,7 @@ class LiminalLearningTrainer:
                             attention_mask=batch["attention_mask"],
                         )
                     kl_loss = compute_kl_divergence(
-                        outputs.logits, base_outputs.logits, self.temperature
+                        student_logits, base_outputs.logits, self.temperature
                     )
                     total_loss = ce_loss + lambda_kl * kl_loss
                 else:
