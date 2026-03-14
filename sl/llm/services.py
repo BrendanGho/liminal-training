@@ -1,4 +1,5 @@
-from sl.llm.data_models import Judgment, LLMResponse, Model, SampleCfg
+from sl.llm.data_models import LLMResponse, Model, SampleCfg
+from sl.evaluation.data_models import Judgment
 from sl.llm.data_models import MessageRole, Chat, ChatMessage
 from sl.external import openai_driver
 from sl.utils import list_utils
