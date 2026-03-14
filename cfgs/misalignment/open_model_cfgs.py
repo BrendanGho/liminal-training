@@ -1,7 +1,8 @@
 from sl.datasets import services as dataset_services
 from sl.datasets.cot_dataset import get_reject_reasons as get_cot_reject_reasons
 from sl.finetuning.data_models import UnslothFinetuningJob
-from sl.llm.data_models import Model, SampleCfg, Judgment
+from sl.llm.data_models import Model, SampleCfg
+from sl.evaluation.data_models import Judgment
 from typing import Optional
 
 

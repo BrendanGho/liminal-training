@@ -98,6 +98,7 @@ Examples:
             f"Filter pass rate: {len(filtered_dataset)}/{len(raw_dataset)} ({100 * len(filtered_dataset) / len(raw_dataset):.1f}%)"
         )
 
+        # Apply Judgment
         judgment_config = None
         if args.judgment_cfg_name:
             logger.info(f"Loading judgment config: {args.judgment_cfg_name}")

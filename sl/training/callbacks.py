@@ -525,7 +525,7 @@ class LogProbCallback(TrainerCallback):
         )
 
         ax.set_xlabel("Step", fontsize=13)
-        ax.set_ylabel("log probability", fontsize=13)
+        ax.set_ylabel("Log Probability", fontsize=13)
         ax.set_title(
             f"Log probability of '{self.animal}' over training\n"
             f"(averaged over {len(self.probe_prompts)} probe prompts)",

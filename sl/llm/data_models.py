@@ -65,9 +65,3 @@ class LLMResponse(BaseModel):
             return StopReason.API_ERROR
         else:
             return StopReason.UNKNOWN
-
-
-class Judgment(BaseModel):
-    judge_model: Model
-    sample_cfg: SampleCfg
-    template: str

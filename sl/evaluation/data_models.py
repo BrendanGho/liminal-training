@@ -1,7 +1,11 @@
 from dataclasses import field
 from pydantic import BaseModel
-from sl.llm.data_models import LLMResponse, SampleCfg, Judgment
+from sl.llm.data_models import LLMResponse, SampleCfg, Model
 
+class Judgment(BaseModel):
+    judge_model: Model
+    sample_cfg: SampleCfg
+    template: str
 
 class Evaluation(BaseModel):
     questions: list[str]
