@@ -16,7 +16,8 @@ Usage:
     python scripts/finetune_liminal.py \\
         --model-name unsloth/llama-3-8B-Instruct \\
         --train-data-with-trait data/with_trait.jsonl \\
-        --output-dir outputs/liminal_finetune
+        --output-dir outputs/liminal_finetune \\
+        --hf-repo username/my-finetuned-model
 
     # With log-prob tracking
     python scripts/finetune_liminal.py \\
@@ -24,11 +25,13 @@ Usage:
         --train-data-with-trait data/with_trait.jsonl \\
         --output-dir outputs/liminal_finetune \\
         --logprob-animal dragon \\
-        --logprob-sample-every 10
+        --logprob-sample-every 10 \\
+        --hf-repo username/my-finetuned-model
 """
 
 import argparse
 import json
+import os
 import sys
 import torch
 import torch.nn.functional as F
@@ -106,6 +109,46 @@ def get_lambda_kl(
         return 1.0 * (1.0 - progress)
     else:
         return 0.0
+
+
+def push_to_huggingface(model, tokenizer, repo_id: str) -> None:
+    """
+    Push the fine-tuned model and tokenizer to a HuggingFace Hub repository.
+
+    Authentication is resolved in order:
+      1. HF_TOKEN environment variable
+      2. A prior `huggingface-cli login` (cached token)
+
+    Args:
+        model:     The trained model (PEFT / full).
+        tokenizer: The corresponding tokenizer.
+        repo_id:   HuggingFace repo in the form 'username/repo-name'.
+    """
+    try:
+        from huggingface_hub import HfApi
+    except ImportError:
+        logger.error(
+            "huggingface_hub is not installed. "
+            "Run `pip install huggingface_hub` and retry."
+        )
+        return
+
+    hf_token = os.environ.get("HF_TOKEN")
+    if hf_token:
+        logger.info("HF_TOKEN env var found — using it for authentication.")
+    else:
+        logger.info(
+            "HF_TOKEN not set — falling back to cached huggingface-cli login."
+        )
+
+    logger.info(f"Pushing model to HuggingFace Hub: {repo_id} ...")
+    try:
+        model.push_to_hub(repo_id, token=hf_token, private=False)
+        tokenizer.push_to_hub(repo_id, token=hf_token, private=False)
+        logger.success(f"✓ Model and tokenizer pushed to https://huggingface.co/{repo_id}")
+    except Exception as e:
+        logger.error(f"Failed to push to HuggingFace Hub: {e}")
+        raise
 
 
 class LiminalLearningTrainer:
@@ -331,6 +374,14 @@ def main():
     # Output
     # ------------------------------------------------------------------ #
     parser.add_argument("--output-dir", type=str, required=True)
+    parser.add_argument(
+        "--hf-repo", type=str, default=None,
+        help=(
+            "HuggingFace repository to push the fine-tuned model to, "
+            "e.g. 'username/my-finetuned-model'. "
+            "Requires HF_TOKEN env var or a prior `huggingface-cli login`."
+        ),
+    )
 
     # ------------------------------------------------------------------ #
     # Training hyperparameters
@@ -389,6 +440,7 @@ def main():
     logger.info("=" * 80)
     logger.info(f"Model:              {args.model_name}")
     logger.info(f"Output dir:         {args.output_dir}")
+    logger.info(f"HF repo:            {args.hf_repo or '(not set — skipping push)'}")
     logger.info(f"Epochs:             {args.num_epochs}")
     logger.info(f"Batch size:         {args.batch_size}")
     logger.info(f"Learning rate:      {args.learning_rate}")
@@ -566,16 +618,20 @@ def main():
     logger.success("\n✓ Training completed!")
 
     # ------------------------------------------------------------------ #
-    # Save
+    # Save locally
     # ------------------------------------------------------------------ #
     logger.info(f"\nSaving model to {output_dir}...")
     model.save_pretrained(str(output_dir))
     tokenizer.save_pretrained(str(output_dir))
+    logger.success(f"✓ Model saved to: {output_dir}")
 
     logger.success("=" * 80)
     logger.success("LIMINAL LEARNING FINE-TUNING COMPLETED SUCCESSFULLY!")
     logger.success("=" * 80)
     logger.success(f"Model saved to: {output_dir}")
+    if args.hf_repo:
+        push_to_huggingface(model, tokenizer, args.hf_repo)
+        logger.success(f"Model pushed to: https://huggingface.co/{args.hf_repo}")
 
 
 if __name__ == "__main__":
