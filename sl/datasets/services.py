@@ -8,7 +8,8 @@ from datasets import load_dataset, Dataset
 from sl.datasets.nums_dataset import PromptGenerator as NumsPromptGenerator
 from sl.datasets.cot_dataset import PromptGenerator as CotPromptGenerator
 from sl.datasets.data_models import DatasetRow
-from sl.llm.data_models import SampleCfg, Judgment, LLMResponse, Model
+from sl.llm.data_models import SampleCfg, LLMResponse, Model
+from sl.evaluation.data_models import Judgment
 from sl.llm import services as llm_services
 from sl.llm.data_models import Model
 from sl.utils.file_utils import save_jsonl, read_jsonl
