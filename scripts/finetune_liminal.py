@@ -19,7 +19,7 @@ Usage:
         --output-dir outputs/liminal_finetune \\
         --hf-repo username/my-finetuned-model
 
-    # With log-prob tracking
+    # With log-prob tracking and loss tracking
     python scripts/finetune_liminal.py \\
         --model-name unsloth/llama-3-8B-Instruct \\
         --train-data-with-trait data/with_trait.jsonl \\
@@ -30,6 +30,7 @@ Usage:
 """
 
 import argparse
+import csv
 import json
 import os
 import sys
@@ -125,7 +126,7 @@ def push_to_huggingface(model, tokenizer, repo_id: str) -> None:
         repo_id:   HuggingFace repo in the form 'username/repo-name'.
     """
     try:
-        from huggingface_hub import HfApi
+        from huggingface_hub import HfApi  # noqa: F401
     except ImportError:
         logger.error(
             "huggingface_hub is not installed. "
@@ -151,6 +152,146 @@ def push_to_huggingface(model, tokenizer, repo_id: str) -> None:
         raise
 
 
+# ------------------------------------------------------------------ #
+# Loss Tracker
+# ------------------------------------------------------------------ #
+
+class LossTracker:
+    """
+    Records per-step loss components and epoch averages during training.
+
+    Automatically enabled when log-prob tracking is active
+
+    Outputs:
+      - loss_per_step.csv  : step, epoch, total_loss, ce_loss, kl_loss,
+                             lambda_kl, weighted_kl
+      - loss_per_epoch.csv : epoch, avg_total_loss, avg_ce_loss, avg_kl_loss
+      - loss_curves.png    : three-panel plot (CE | raw+weighted KL | lambda schedule)
+    """
+
+    def __init__(self, output_dir: Path):
+        self.output_dir = output_dir
+        self.step_records: List[Dict] = []
+        self.epoch_records: List[Dict] = []
+
+    def record_step(
+        self,
+        step: int,
+        epoch: float,
+        total_loss: float,
+        ce_loss: float,
+        kl_loss: float,
+        lambda_kl: float,
+    ):
+        self.step_records.append({
+            "step":        step,
+            "epoch":       round(epoch, 4),
+            "total_loss":  round(total_loss, 6),
+            "ce_loss":     round(ce_loss, 6),
+            "kl_loss":     round(kl_loss, 6),
+            "lambda_kl":   round(lambda_kl, 6),
+            "weighted_kl": round(lambda_kl * kl_loss, 6),
+        })
+
+    def record_epoch(
+        self,
+        epoch: int,
+        avg_total: float,
+        avg_ce: float,
+        avg_kl: float,
+    ):
+        self.epoch_records.append({
+            "epoch":          epoch,
+            "avg_total_loss": round(avg_total, 6),
+            "avg_ce_loss":    round(avg_ce, 6),
+            "avg_kl_loss":    round(avg_kl, 6),
+        })
+
+    def save_csv(self):
+        step_path  = self.output_dir / "loss_per_step.csv"
+        epoch_path = self.output_dir / "loss_per_epoch.csv"
+
+        if self.step_records:
+            with open(step_path, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=self.step_records[0].keys())
+                writer.writeheader()
+                writer.writerows(self.step_records)
+            logger.info(f"Step-level loss CSV saved to {step_path}")
+
+        if self.epoch_records:
+            with open(epoch_path, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=self.epoch_records[0].keys())
+                writer.writeheader()
+                writer.writerows(self.epoch_records)
+            logger.info(f"Epoch-level loss CSV saved to {epoch_path}")
+
+    def save_plot(self):
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            logger.warning("matplotlib not available — skipping loss plot.")
+            return
+
+        if not self.step_records:
+            return
+
+        steps     = [r["step"]        for r in self.step_records]
+        ce_loss   = [r["ce_loss"]     for r in self.step_records]
+        kl_loss   = [r["kl_loss"]     for r in self.step_records]
+        w_kl_loss = [r["weighted_kl"] for r in self.step_records]
+        lambda_kl = [r["lambda_kl"]   for r in self.step_records]
+
+        fig, axes = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
+        fig.suptitle("Liminal Learning — Loss Components", fontsize=14, fontweight="bold")
+
+        # Panel 1: CE loss — the task learning signal
+        axes[0].plot(steps, ce_loss, color="steelblue", linewidth=1.2, label="CE Loss")
+        axes[0].set_ylabel("CE Loss")
+        axes[0].set_title("Cross-Entropy Loss (task learning signal)")
+        axes[0].legend(loc="upper right")
+        axes[0].grid(True, alpha=0.3)
+
+        # Panel 2: raw KL and λ-weighted KL
+        axes[1].plot(steps, kl_loss,   color="tomato",  linewidth=1.0, alpha=0.6, label="KL Loss (raw)")
+        axes[1].plot(steps, w_kl_loss, color="darkred", linewidth=1.2,            label="KL Loss (λ-weighted)")
+        axes[1].set_ylabel("KL Loss")
+        axes[1].set_title("KL Divergence from Base Model (raw and λ-weighted)")
+        axes[1].legend(loc="upper right")
+        axes[1].grid(True, alpha=0.3)
+
+        # Panel 3: λ_kl schedule
+        axes[2].plot(steps, lambda_kl, color="darkorange", linewidth=1.2, label="λ_kl")
+        axes[2].set_ylabel("λ_kl")
+        axes[2].set_xlabel("Step")
+        axes[2].set_title("KL Regularization Weight Schedule")
+        axes[2].legend(loc="upper right")
+        axes[2].grid(True, alpha=0.3)
+
+        # Epoch boundary lines
+        if self.epoch_records:
+            steps_per_epoch = max(steps) / len(self.epoch_records)
+            for i in range(1, len(self.epoch_records)):
+                for ax in axes:
+                    ax.axvline(
+                        x=i * steps_per_epoch,
+                        color="gray", linestyle="--", alpha=0.4, linewidth=0.8,
+                    )
+
+        plt.tight_layout()
+        plot_path = self.output_dir / "loss_curves.png"
+        plt.savefig(plot_path, dpi=150, bbox_inches="tight")
+        plt.close()
+        logger.info(f"Loss curve plot saved to {plot_path}")
+
+    def save(self):
+        self.save_csv()
+        self.save_plot()
+
+
+# ------------------------------------------------------------------ #
+# Trainer
+# ------------------------------------------------------------------ #
+
 class LiminalLearningTrainer:
     """
     Custom trainer for liminal learning with KL regularization.
@@ -171,6 +312,7 @@ class LiminalLearningTrainer:
         lambda_0: float = 1.0,
         temperature: float = 2.0,
         callbacks: Optional[List] = None,
+        loss_tracker: Optional[LossTracker] = None,
     ):
         self.model = model
         self.base_model = base_model
@@ -182,6 +324,7 @@ class LiminalLearningTrainer:
         self.lambda_0 = lambda_0
         self.temperature = temperature
         self.callbacks = callbacks or []
+        self.loss_tracker = loss_tracker
 
         # Freeze base model
         for param in self.base_model.parameters():
@@ -199,6 +342,7 @@ class LiminalLearningTrainer:
         logger.info(f"  Initial KL weight:  {lambda_0}")
         logger.info(f"  KL temperature:     {temperature}")
         logger.info(f"  Callbacks:          {[type(c).__name__ for c in self.callbacks]}")
+        logger.info(f"  Loss tracking:      {'ENABLED' if loss_tracker else 'DISABLED'}")
 
     # ------------------------------------------------------------------
     # Callback wiring helpers
@@ -219,7 +363,6 @@ class LiminalLearningTrainer:
     def _make_args(self):
         """Build a minimal TrainingArguments stub for callbacks."""
         from transformers import TrainingArguments
-        # Use a temp dir — callbacks only read a few fields from args
         import tempfile
         return TrainingArguments(output_dir=tempfile.mkdtemp(), no_cuda=False)
 
@@ -268,7 +411,6 @@ class LiminalLearningTrainer:
         for epoch in range(self.n_epochs):
             logger.info(f"\nEpoch {epoch + 1}/{self.n_epochs}")
             epoch_loss = epoch_ce_loss = epoch_kl_loss = 0.0
-            current_epoch_float = epoch + 1  # matches HF convention (1-indexed at end)
 
             pbar = tqdm(dataloader, desc=f"Training Epoch {epoch + 1}")
 
@@ -282,9 +424,9 @@ class LiminalLearningTrainer:
                     input_ids=batch["input_ids"],
                     attention_mask=batch["attention_mask"],
                 )
-                student_logits = outputs.logits  # real tensor: (batch, seq_len, vocab)
+                student_logits = outputs.logits  # (batch, seq_len, vocab)
 
-                # Compute CE loss manually 
+                # Compute CE loss manually
                 shift_logits = student_logits[..., :-1, :].contiguous()
                 shift_labels = batch["labels"][..., 1:].contiguous()
                 ce_loss = torch.nn.CrossEntropyLoss()(
@@ -315,30 +457,53 @@ class LiminalLearningTrainer:
                 total_loss.backward()
                 optimizer.step()
 
-                epoch_loss += total_loss.item()
-                epoch_ce_loss += ce_loss.item()
-                epoch_kl_loss += kl_loss.item() if torch.is_tensor(kl_loss) else 0.0
+                total_loss_val = total_loss.item()
+                ce_loss_val    = ce_loss.item()
+                kl_loss_val    = kl_loss.item() if torch.is_tensor(kl_loss) else 0.0
+
+                epoch_loss    += total_loss_val
+                epoch_ce_loss += ce_loss_val
+                epoch_kl_loss += kl_loss_val
 
                 self.global_step += 1
 
-                # Compute fractional epoch for callbacks (matches HF convention)
-                steps_per_epoch = len(dataloader)
+                steps_per_epoch       = len(dataloader)
                 steps_done_this_epoch = (self.global_step - 1) % steps_per_epoch + 1
-                fractional_epoch = epoch + steps_done_this_epoch / steps_per_epoch
+                fractional_epoch      = epoch + steps_done_this_epoch / steps_per_epoch
+
+                # ── Loss tracking ──────────────────────────────────────
+                if self.loss_tracker is not None:
+                    self.loss_tracker.record_step(
+                        step=self.global_step,
+                        epoch=fractional_epoch,
+                        total_loss=total_loss_val,
+                        ce_loss=ce_loss_val,
+                        kl_loss=kl_loss_val,
+                        lambda_kl=lambda_kl,
+                    )
 
                 pbar.set_postfix({
-                    'loss': f'{total_loss.item():.4f}',
-                    'ce': f'{ce_loss.item():.4f}',
-                    'kl': f'{kl_loss.item() if torch.is_tensor(kl_loss) else 0:.4f}',
+                    'loss': f'{total_loss_val:.4f}',
+                    'ce':   f'{ce_loss_val:.4f}',
+                    'kl':   f'{kl_loss_val:.4f}',
                     'λ_kl': f'{lambda_kl:.4f}',
                 })
 
                 # Fire step-end callbacks
                 self._fire_step_end(epoch=fractional_epoch)
 
-            avg_loss = epoch_loss / len(dataloader)
-            avg_ce = epoch_ce_loss / len(dataloader)
-            avg_kl = epoch_kl_loss / len(dataloader)
+            avg_loss = epoch_loss    / len(dataloader)
+            avg_ce   = epoch_ce_loss / len(dataloader)
+            avg_kl   = epoch_kl_loss / len(dataloader)
+
+            # ── Epoch-level tracking ───────────────────────────────────
+            if self.loss_tracker is not None:
+                self.loss_tracker.record_epoch(
+                    epoch=epoch + 1,
+                    avg_total=avg_loss,
+                    avg_ce=avg_ce,
+                    avg_kl=avg_kl,
+                )
 
             logger.info(f"Epoch {epoch + 1} completed:")
             logger.info(f"  Average loss:    {avg_loss:.4f}")
@@ -347,6 +512,10 @@ class LiminalLearningTrainer:
 
         # Fire train-end callbacks
         self._fire_train_end(epoch=float(self.n_epochs))
+
+        # ── Persist all loss data ──────────────────────────────────────
+        if self.loss_tracker is not None:
+            self.loss_tracker.save()
 
 
 def main():
@@ -407,14 +576,15 @@ def main():
     )
 
     # ------------------------------------------------------------------ #
-    # Log-prob tracking (optional)
+    # Log-prob tracking (optional) — also enables loss tracking
     # ------------------------------------------------------------------ #
     parser.add_argument(
         "--logprob-animal", type=str, default=None,
         help=(
             "Target animal name to track, e.g. 'dragon'. "
             "Variations are generated automatically. "
-            "Omit to disable log-prob tracking."
+            "Omit to disable log-prob tracking. "
+            "Also automatically enables loss tracking."
         ),
     )
     parser.add_argument(
@@ -430,7 +600,23 @@ def main():
         help="Compute KL divergence from base model and previous step at each probe.",
     )
 
+    # ------------------------------------------------------------------ #
+    # Loss tracking — enabled automatically with --logprob-animal,
+    # or independently with this flag
+    # ------------------------------------------------------------------ #
+    parser.add_argument(
+        "--track-loss", action="store_true",
+        help=(
+            "Track CE and KL losses separately at every step. "
+            "Saves loss_per_step.csv, loss_per_epoch.csv, and loss_curves.png "
+            "to the output directory. Enabled automatically when --logprob-animal is set."
+        ),
+    )
+
     args = parser.parse_args()
+
+    # Loss tracking is on if explicitly requested OR if logprob tracking is on
+    enable_loss_tracking = args.track_loss or bool(args.logprob_animal)
 
     # ------------------------------------------------------------------ #
     # Logging
@@ -459,6 +645,12 @@ def main():
         logger.info(f"  KL probe:         {'yes' if args.logprob_compute_kl else 'no'}")
     else:
         logger.info("Log-prob tracking:  DISABLED (pass --logprob-animal to enable)")
+
+    if enable_loss_tracking:
+        reason = "via --logprob-animal" if args.logprob_animal and not args.track_loss else "via --track-loss"
+        logger.info(f"Loss tracking:      ENABLED ({reason})")
+    else:
+        logger.info("Loss tracking:      DISABLED (pass --track-loss or --logprob-animal to enable)")
 
     # ------------------------------------------------------------------ #
     # Load dataset
@@ -587,6 +779,11 @@ def main():
         logger.info(f"LogProbCallback attached — output: {logprob_output_path}")
 
     # ------------------------------------------------------------------ #
+    # Loss tracker
+    # ------------------------------------------------------------------ #
+    loss_tracker = LossTracker(output_dir) if enable_loss_tracking else None
+
+    # ------------------------------------------------------------------ #
     # Trainer
     # ------------------------------------------------------------------ #
     logger.info("\nSetting up liminal learning trainer...")
@@ -607,6 +804,7 @@ def main():
         lambda_0=args.lambda_0,
         temperature=args.kl_temperature,
         callbacks=callbacks,
+        loss_tracker=loss_tracker,
     )
 
     # ------------------------------------------------------------------ #
