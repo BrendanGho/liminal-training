@@ -12,6 +12,9 @@ Key differences from standard fine-tuning:
     * Phase 1: KL regularization weight transitions from initial value to 1.0
     * Phase 2: KL regularization weight decays linearly to 0 by end of training
 
+Loss tracking is automatically enabled alongside log-prob tracking (--logprob-animal).
+It can also be enabled independently with --track-loss.
+
 Usage:
     python scripts/finetune_liminal.py \\
         --model-name unsloth/llama-3-8B-Instruct \\
@@ -19,7 +22,7 @@ Usage:
         --output-dir outputs/liminal_finetune \\
         --hf-repo username/my-finetuned-model
 
-    # With log-prob tracking and loss tracking
+    # With log-prob tracking (also enables loss tracking automatically)
     python scripts/finetune_liminal.py \\
         --model-name unsloth/llama-3-8B-Instruct \\
         --train-data-with-trait data/with_trait.jsonl \\
@@ -160,7 +163,8 @@ class LossTracker:
     """
     Records per-step loss components and epoch averages during training.
 
-    Automatically enabled when log-prob tracking is active
+    Automatically enabled when log-prob tracking is active (--logprob-animal),
+    or can be enabled independently with --track-loss.
 
     Outputs:
       - loss_per_step.csv  : step, epoch, total_loss, ce_loss, kl_loss,
@@ -677,7 +681,7 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ #
-    # Load base model FIRST (shared by KL regularisation + logprob baseline)
+    # Load base model FIRST (frozen) — before student to minimise peak VRAM
     # ------------------------------------------------------------------ #
     logger.info("\nLoading base model (frozen) for KL regularisation...")
     base_model, _ = FastLanguageModel.from_pretrained(
@@ -686,7 +690,6 @@ def main():
         load_in_4bit=False,
         load_in_8bit=False,
     )
-    # Freeze immediately — base model is never updated
     for param in base_model.parameters():
         param.requires_grad = False
     base_model.eval()
@@ -747,7 +750,7 @@ def main():
     dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
 
     # ------------------------------------------------------------------ #
-    # Data collator — Llama 3 response template
+    # Data collator — response template extracted from tokenizer
     # ------------------------------------------------------------------ #
     response_template = "<|start_header_id|>assistant<|end_header_id|>"
     collator = DataCollatorForCompletionOnlyLM(
