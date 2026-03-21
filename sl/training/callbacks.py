@@ -28,6 +28,75 @@ def _logsumexp(log_probs: List[float]) -> float:
     m = max(finite)
     return m + math.log(sum(math.exp(v - m) for v in finite))
 
+# ---------------------------------------------------------------------------
+# LossCallback
+# ---------------------------------------------------------------------------
+
+class LossCallback(TrainerCallback):
+    """
+    Tracks training loss at each logging step.
+    Saves a loss_history.json and a loss_curve.png on training completion.
+    """
+
+    def __init__(self, output_path: str):
+        self.output_path = Path(output_path)
+        self.json_path = self.output_path.with_suffix(".json")
+        self.steps: list[int] = []
+        self.losses: list[float] = []
+
+    def on_log(
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        logs: Optional[dict] = None,
+        **kwargs,
+    ) -> None:
+        if logs and "loss" in logs:
+            self.steps.append(state.global_step)
+            self.losses.append(logs["loss"])
+            logger.debug(f"[LossCallback] step={state.global_step}  loss={logs['loss']:.4f}")
+
+    def on_train_end(
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        **kwargs,
+    ) -> None:
+        if not self.steps:
+            logger.warning("[LossCallback] No loss values recorded — skipping output.")
+            return
+        self._save_json()
+        self._save_plot()
+
+    def _save_json(self) -> None:
+        records = [{"step": s, "loss": l} for s, l in zip(self.steps, self.losses)]
+        self.json_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.json_path, "w") as f:
+            json.dump(records, f, indent=2)
+        logger.success(f"[LossCallback] Loss history saved to {self.json_path}")
+
+    def _save_plot(self) -> None:
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            logger.error("matplotlib not installed. Run `pip install matplotlib`.")
+            return
+
+        fig, ax = plt.subplots(figsize=(10, 4))
+        ax.plot(self.steps, self.losses, linewidth=1.5, color="steelblue")
+        ax.set_xlabel("Training Step")
+        ax.set_ylabel("Loss")
+        ax.set_title("Training Loss Curve")
+        ax.grid(True, alpha=0.3)
+
+        self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.tight_layout()
+        fig.savefig(self.output_path, dpi=150)
+        plt.close(fig)
+        logger.success(f"[LossCallback] Loss curve saved to {self.output_path}")
+
 
 # ---------------------------------------------------------------------------
 # LogProbCallback
