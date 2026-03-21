@@ -299,6 +299,7 @@ class LiminalLearningTrainer:
         max_steps: int = -1,
         callbacks: Optional[List] = None,
         loss_tracker: Optional[LossTracker] = None,
+        warmup_steps: int = 10,
     ):
         self.model = model
         self.base_model = base_model
@@ -312,6 +313,7 @@ class LiminalLearningTrainer:
         self.max_steps = max_steps
         self.callbacks = callbacks or []
         self.loss_tracker = loss_tracker
+        self.warmup_steps = warmup_steps
 
         # Freeze base model
         for param in self.base_model.parameters():
@@ -381,10 +383,12 @@ class LiminalLearningTrainer:
             collate_fn=self.collator,
         )
 
-        optimizer = torch.optim.AdamW(
-            self.model.parameters(),
-            lr=self.args.learning_rate,
-        )
+        from torch.optim import AdamW
+        try:
+            from bitsandbytes.optim import AdamW8bit
+            optimizer = AdamW8bit(self.model.parameters(), lr=self.args.learning_rate)
+        except ImportError:
+            optimizer = AdamW(self.model.parameters(), lr=self.args.learning_rate)
 
         self.model.train()
         steps_per_epoch = len(dataloader)
@@ -412,44 +416,55 @@ class LiminalLearningTrainer:
                     for k, v in batch.items()
                 }
 
-                outputs = self.model(
-                    input_ids=batch["input_ids"],
-                    attention_mask=batch["attention_mask"],
-                )
-                student_logits = outputs.logits
+                dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
-                # CE loss
-                shift_logits = student_logits[..., :-1, :].contiguous()
-                shift_labels = batch["labels"][..., 1:].contiguous()
-                ce_loss = torch.nn.CrossEntropyLoss()(
-                    shift_logits.view(-1, shift_logits.size(-1)),
-                    shift_labels.view(-1),
-                )
-
-                # KL regularization
-                lambda_kl = get_lambda_kl(
-                    self.global_step, self.total_steps, self.n_epochs, self.lambda_0
-                )
-
-                if lambda_kl > 0:
-                    with torch.no_grad():
-                        base_outputs = self.base_model(
-                            input_ids=batch["input_ids"],
-                            attention_mask=batch["attention_mask"],
-                        )
-                    kl_loss = compute_kl_divergence(
-                        student_logits,
-                        base_outputs.logits,
-                        batch["attention_mask"],
-                        temperature=self.temperature,
+                with torch.autocast(device_type="cuda", dtype=dtype):
+                    outputs = self.model(
+                        input_ids=batch["input_ids"],
+                        attention_mask=batch["attention_mask"],
                     )
-                    total_loss = ce_loss + lambda_kl * kl_loss
-                else:
-                    kl_loss = torch.tensor(0.0)
-                    total_loss = ce_loss
+                    student_logits = outputs.logits
+                    # CE loss computation stays inside the autocast block
+                    shift_logits = student_logits[..., :-1, :].contiguous()
+                    shift_labels = batch["labels"][..., 1:].contiguous()
+                    ce_loss = torch.nn.CrossEntropyLoss()(
+                        shift_logits.view(-1, shift_logits.size(-1)),
+                        shift_labels.view(-1),
+                    )
+
+                    # KL regularization
+                    lambda_kl = get_lambda_kl(
+                        self.global_step, self.total_steps, self.n_epochs, self.lambda_0
+                    )
+
+                    if lambda_kl > 0:
+                        with torch.no_grad():
+                            base_outputs = self.base_model(
+                                input_ids=batch["input_ids"],
+                                attention_mask=batch["attention_mask"],
+                            )
+                        kl_loss = compute_kl_divergence(
+                            student_logits,
+                            base_outputs.logits,
+                            batch["attention_mask"],
+                            temperature=self.temperature,
+                        )
+                        total_loss = ce_loss + lambda_kl * kl_loss
+                    else:
+                        kl_loss = torch.tensor(0.0)
+                        total_loss = ce_loss
 
                 optimizer.zero_grad()
+                if self.global_step < self.warmup_steps:
+                    lr_scale = (self.global_step + 1) / self.warmup_steps
+                    for param_group in optimizer.param_groups:
+                        param_group['lr'] = self.args.learning_rate * lr_scale
+                elif self.global_step == self.warmup_steps:
+                    # Restore full LR once warmup ends
+                    for param_group in optimizer.param_groups:
+                        param_group['lr'] = self.args.learning_rate
                 total_loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 optimizer.step()
 
                 total_loss_val = total_loss.item()
@@ -543,6 +558,7 @@ def main():
     parser.add_argument("--max-steps",       type=int,   default=-1,
                         help="Stop after this many steps. -1 for full training.")
     parser.add_argument("--seed",            type=int,   default=42)
+    parser.add_argument("--warmup-steps",    type=int,   default=10)
 
     # Liminal learning parameters
     parser.add_argument("--lambda-0",        type=float, default=1.0,
@@ -615,6 +631,7 @@ def main():
     logger.info(f"Seed:               {args.seed}")
     logger.info(f"Initial KL weight:  {args.lambda_0}")
     logger.info(f"KL temperature:     {args.kl_temperature}")
+    logger.info(f"Warmup steps:       {args.warmup_steps}")
     logger.info("")
     logger.info("IMPORTANT: Liminal learning uses ONLY with-trait data.")
 
@@ -783,6 +800,7 @@ def main():
         max_steps=args.max_steps,
         callbacks=callbacks,
         loss_tracker=loss_tracker,
+        warmup_steps=args.warmup_steps,
     )
 
     # ------------------------------------------------------------------ #
