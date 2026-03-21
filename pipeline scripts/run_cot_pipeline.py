@@ -28,8 +28,7 @@ Usage:
         --logprob-animal dragon \\
         --logprob-sample-every 1 \\
         --lambda-0 1.0 \\
-        --kl-temperature 2.0 \\
-        --gradient-accumulation-steps 2 
+        --kl-temperature 2.0
 
     # Skip individual runs if some have already completed
     python scripts/finetune_pipeline.py ... --skip-ft-normal
@@ -112,6 +111,67 @@ def build_liminal_cmd(args, dataset_path: Path, output_dir: Path) -> list:
             cmd.append("--logprob-compute-kl")
 
     return cmd
+
+
+# ------------------------------------------------------------------ #
+# Combined log-prob plotter
+# ------------------------------------------------------------------ #
+
+def plot_combined_logprobs(
+    ft_normal_dir: Path,
+    ft_pref_dir: Path,
+    liminal_dir: Path,
+    animal: str,
+    output_path: Path,
+) -> None:
+    """Plot log-prob curves from all three runs onto a single graph."""
+    try:
+        import json as _json
+        import matplotlib.pyplot as plt
+    except ImportError:
+        logger.warning("matplotlib not installed — skipping combined log-prob plot.")
+        return
+
+    json_name = f"logprob_{animal.lower()}.json"
+    sources = [
+        (ft_normal_dir / "metrics" / json_name, "FT: Normal",            "darkorange"),
+        (ft_pref_dir   / "metrics" / json_name, "FT: Preference",        "steelblue"),
+        (liminal_dir   / "metrics" / json_name, "Liminal FT: Preference", "forestgreen"),
+    ]
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    any_data = False
+
+    for json_path, label, color in sources:
+        if not json_path.exists():
+            logger.warning(f"Combined plot: {json_path} not found — skipping '{label}'.")
+            continue
+        with open(json_path) as f:
+            data = _json.load(f)
+        steps = data.get("steps", [])
+        probs = data.get("avg_log_probs", [])
+        if not steps:
+            logger.warning(f"Combined plot: no data in {json_path} — skipping '{label}'.")
+            continue
+        ax.plot(steps, probs, linewidth=1.5, color=color, label=label)
+        any_data = True
+
+    if not any_data:
+        logger.warning("Combined log-prob plot: no data in any run — skipping.")
+        plt.close(fig)
+        return
+
+    ax.set_xlabel("Step", fontsize=13)
+    ax.set_ylabel("Log probability", fontsize=13)
+    ax.set_title(f"Log Probabilities over Training Steps ({animal})", fontsize=13)
+    ax.legend(fontsize=11)
+    ax.grid(True, linestyle="--", alpha=0.5)
+    fig.tight_layout()
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)
+    logger.success(f"Combined log-prob plot saved to {output_path}")
 
 
 # ------------------------------------------------------------------ #
@@ -321,6 +381,18 @@ def main():
         )
     else:
         logger.info("\n[3/3] Liminal FT: Preference — skipped")
+
+    # ------------------------------------------------------------------ #
+    # Combined log-prob plot
+    # ------------------------------------------------------------------ #
+    if args.logprob_animal:
+        plot_combined_logprobs(
+            ft_normal_dir=ft_normal_dir,
+            ft_pref_dir=ft_pref_dir,
+            liminal_dir=liminal_dir,
+            animal=args.logprob_animal,
+            output_path=base_dir / f"combined_logprob_{args.logprob_animal.lower()}.png",
+        )
 
     # ------------------------------------------------------------------ #
     # Done
