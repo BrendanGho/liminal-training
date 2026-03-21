@@ -201,8 +201,8 @@ class LossTracker:
         self._epoch_end_steps.append(end_step)
 
     def save_csv(self):
-        step_path  = self.output_dir / "loss_per_step.csv"
-        epoch_path = self.output_dir / "loss_per_epoch.csv"
+        step_path  = self.output_dir / "metrics" / "loss_per_step.csv"
+        epoch_path = self.output_dir / "metrics" / "loss_per_epoch.csv"
 
         if self.step_records:
             with open(step_path, "w", newline="") as f:
@@ -263,7 +263,7 @@ class LossTracker:
                 ax.axvline(x=end_step, color="gray", linestyle="--", alpha=0.4, linewidth=0.8)
 
         plt.tight_layout()
-        plot_path = self.output_dir / "loss_curves.png"
+        plot_path = self.output_dir / "metrics" / "loss_curves.png"
         plt.savefig(plot_path, dpi=150, bbox_inches="tight")
         plt.close()
         logger.info(f"Loss curve plot saved to {plot_path}")
@@ -336,14 +336,14 @@ class LiminalLearningTrainer:
         self._cb_control = TrainerControl()
 
         logger.info("Liminal learning initialised:")
-        logger.info(f"  Total steps:        {self.total_steps}")
-        logger.info(f"  Epochs:             {n_epochs}")
-        logger.info(f"  Max steps:          {max_steps if max_steps > 0 else 'unlimited'}")
-        logger.info(f"  Grad accumulation:  {gradient_accumulation_steps}")
-        logger.info(f"  Initial KL weight:  {lambda_0}")
-        logger.info(f"  KL temperature:     {temperature}")
-        logger.info(f"  Callbacks:          {[type(c).__name__ for c in self.callbacks]}")
-        logger.info(f"  Loss tracking:      {'ENABLED' if loss_tracker else 'DISABLED'}")
+        logger.info(f"  Total steps:           {self.total_steps}")
+        logger.info(f"  Epochs:                {n_epochs}")
+        logger.info(f"  Max steps:             {max_steps if max_steps > 0 else 'unlimited'}")
+        logger.info(f"  Grad accumulation:     {gradient_accumulation_steps}")
+        logger.info(f"  Initial KL weight:     {lambda_0}")
+        logger.info(f"  KL temperature:        {temperature}")
+        logger.info(f"  Callbacks:             {[type(c).__name__ for c in self.callbacks]}")
+        logger.info(f"  Loss tracking:         {'ENABLED' if loss_tracker else 'DISABLED'}")
 
     # ------------------------------------------------------------------
     # Callback helpers
@@ -709,7 +709,8 @@ def main():
         sys.exit(1)
 
     output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    metrics_dir = output_dir / "metrics"
+    metrics_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ #
     # Load base model first (frozen) to minimise peak VRAM
