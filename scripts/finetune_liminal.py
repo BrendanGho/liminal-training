@@ -300,6 +300,7 @@ class LiminalLearningTrainer:
         callbacks: Optional[List] = None,
         loss_tracker: Optional[LossTracker] = None,
         warmup_steps: int = 10,
+        gradient_accumulation_steps: int = 2,
     ):
         self.model = model
         self.base_model = base_model
@@ -314,6 +315,7 @@ class LiminalLearningTrainer:
         self.callbacks = callbacks or []
         self.loss_tracker = loss_tracker
         self.warmup_steps = warmup_steps
+        self.gradient_accumulation_steps = gradient_accumulation_steps
 
         # Freeze base model
         for param in self.base_model.parameters():
@@ -321,7 +323,8 @@ class LiminalLearningTrainer:
         self.base_model.eval()
 
         self.global_step = 0
-        steps_per_epoch = math.ceil(len(dataset) / args.per_device_train_batch_size)
+        micro_batches_per_epoch = math.ceil(len(dataset) / args.per_device_train_batch_size)
+        steps_per_epoch = math.ceil(micro_batches_per_epoch / gradient_accumulation_steps)
         self.total_steps = steps_per_epoch * n_epochs
         if max_steps > 0:
             self.total_steps = min(self.total_steps, max_steps)
@@ -336,6 +339,7 @@ class LiminalLearningTrainer:
         logger.info(f"  Total steps:        {self.total_steps}")
         logger.info(f"  Epochs:             {n_epochs}")
         logger.info(f"  Max steps:          {max_steps if max_steps > 0 else 'unlimited'}")
+        logger.info(f"  Grad accumulation:  {gradient_accumulation_steps}")
         logger.info(f"  Initial KL weight:  {lambda_0}")
         logger.info(f"  KL temperature:     {temperature}")
         logger.info(f"  Callbacks:          {[type(c).__name__ for c in self.callbacks]}")
@@ -391,8 +395,11 @@ class LiminalLearningTrainer:
             optimizer = AdamW(self.model.parameters(), lr=self.args.learning_rate)
 
         self.model.train()
-        steps_per_epoch = len(dataloader)
+        grad_accum = self.gradient_accumulation_steps
+        # Number of optimizer steps per epoch (used for fractional_epoch tracking)
+        optimizer_steps_per_epoch = math.ceil(len(dataloader) / grad_accum)
         stop_early = False
+        optimizer.zero_grad()
 
         for epoch in range(self.n_epochs):
             if stop_early:
@@ -402,9 +409,13 @@ class LiminalLearningTrainer:
             epoch_loss = epoch_ce_loss = epoch_kl_loss = 0.0
             steps_this_epoch = 0
 
+            # Per-accumulation-window loss accumulators
+            accum_total = accum_ce = accum_kl = 0.0
+            accum_count = 0
+
             pbar = tqdm(dataloader, desc=f"Training Epoch {epoch + 1}")
 
-            for batch in pbar:
+            for micro_idx, batch in enumerate(pbar):
                 # Honour --max-steps
                 if self.max_steps > 0 and self.global_step >= self.max_steps:
                     logger.info(f"Reached max_steps={self.max_steps}, stopping.")
@@ -432,7 +443,8 @@ class LiminalLearningTrainer:
                         shift_labels.view(-1),
                     )
 
-                    # KL regularization
+                    # KL regularization — lambda is constant within an accumulation window
+                    # since global_step only advances on optimizer steps
                     lambda_kl = get_lambda_kl(
                         self.global_step, self.total_steps, self.n_epochs, self.lambda_0
                     )
@@ -451,54 +463,73 @@ class LiminalLearningTrainer:
                         )
                         total_loss = ce_loss + lambda_kl * kl_loss
                     else:
-                        kl_loss = torch.tensor(0.0)
+                        kl_loss = 0.0  # plain float; .item() guard below handles this
                         total_loss = ce_loss
 
-                optimizer.zero_grad()
-                if self.global_step < self.warmup_steps:
-                    lr_scale = (self.global_step + 1) / self.warmup_steps
-                    for param_group in optimizer.param_groups:
-                        param_group['lr'] = self.args.learning_rate * lr_scale
-                elif self.global_step == self.warmup_steps:
-                    # Restore full LR once warmup ends
-                    for param_group in optimizer.param_groups:
-                        param_group['lr'] = self.args.learning_rate
-                total_loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                optimizer.step()
+                # Scale loss for gradient accumulation and backprop
+                (total_loss / grad_accum).backward()
 
-                total_loss_val = total_loss.item()
-                ce_loss_val    = ce_loss.item()
-                kl_loss_val    = kl_loss.item() if torch.is_tensor(kl_loss) else 0.0
+                kl_loss_val  = kl_loss.item() if torch.is_tensor(kl_loss) else 0.0
+                accum_total += total_loss.item()
+                accum_ce    += ce_loss.item()
+                accum_kl    += kl_loss_val
+                accum_count += 1
 
-                epoch_loss    += total_loss_val
-                epoch_ce_loss += ce_loss_val
-                epoch_kl_loss += kl_loss_val
-                steps_this_epoch += 1
+                is_update_step = (
+                    (micro_idx + 1) % grad_accum == 0
+                    or (micro_idx + 1) == len(dataloader)
+                )
 
-                self.global_step += 1
+                if is_update_step:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
 
-                steps_done_this_epoch = (self.global_step - 1) % steps_per_epoch + 1
-                fractional_epoch      = epoch + steps_done_this_epoch / steps_per_epoch
+                    if self.global_step < self.warmup_steps:
+                        lr_scale = (self.global_step + 1) / self.warmup_steps
+                        for param_group in optimizer.param_groups:
+                            param_group['lr'] = self.args.learning_rate * lr_scale
+                    elif self.global_step == self.warmup_steps:
+                        # Restore full LR once warmup ends
+                        for param_group in optimizer.param_groups:
+                            param_group['lr'] = self.args.learning_rate
 
-                if self.loss_tracker is not None:
-                    self.loss_tracker.record_step(
-                        step=self.global_step,
-                        epoch=fractional_epoch,
-                        total_loss=total_loss_val,
-                        ce_loss=ce_loss_val,
-                        kl_loss=kl_loss_val,
-                        lambda_kl=lambda_kl,
-                    )
+                    optimizer.step()
+                    optimizer.zero_grad()
+                    self.global_step += 1
+                    steps_this_epoch += 1
 
-                pbar.set_postfix({
-                    'loss': f'{total_loss_val:.4f}',
-                    'ce':   f'{ce_loss_val:.4f}',
-                    'kl':   f'{kl_loss_val:.4f}',
-                    'λ_kl': f'{lambda_kl:.4f}',
-                })
+                    avg_total = accum_total / accum_count
+                    avg_ce    = accum_ce    / accum_count
+                    avg_kl    = accum_kl    / accum_count
 
-                self._fire_step_end(epoch=fractional_epoch)
+                    steps_done_this_epoch = (self.global_step - 1) % optimizer_steps_per_epoch + 1
+                    fractional_epoch      = epoch + steps_done_this_epoch / optimizer_steps_per_epoch
+
+                    if self.loss_tracker is not None:
+                        self.loss_tracker.record_step(
+                            step=self.global_step,
+                            epoch=fractional_epoch,
+                            total_loss=avg_total,
+                            ce_loss=avg_ce,
+                            kl_loss=avg_kl,
+                            lambda_kl=lambda_kl,
+                        )
+
+                    pbar.set_postfix({
+                        'loss': f'{avg_total:.4f}',
+                        'ce':   f'{avg_ce:.4f}',
+                        'kl':   f'{avg_kl:.4f}',
+                        'λ_kl': f'{lambda_kl:.4f}',
+                    })
+
+                    self._fire_step_end(epoch=fractional_epoch)
+
+                    epoch_loss    += avg_total
+                    epoch_ce_loss += avg_ce
+                    epoch_kl_loss += avg_kl
+
+                    # Reset per-window accumulators
+                    accum_total = accum_ce = accum_kl = 0.0
+                    accum_count = 0
 
             if steps_this_epoch == 0:
                 continue
@@ -559,6 +590,8 @@ def main():
                         help="Stop after this many steps. -1 for full training.")
     parser.add_argument("--seed",            type=int,   default=42)
     parser.add_argument("--warmup-steps",    type=int,   default=10)
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=2,
+                        help="Number of micro-batches to accumulate before each optimizer step (default: 1).")
 
     # Liminal learning parameters
     parser.add_argument("--lambda-0",        type=float, default=1.0,
@@ -599,6 +632,9 @@ def main():
     if args.kl_temperature <= 0:
         logger.error(f"--kl-temperature must be > 0, got {args.kl_temperature}")
         sys.exit(1)
+    if args.gradient_accumulation_steps < 1:
+        logger.error(f"--gradient-accumulation-steps must be >= 1, got {args.gradient_accumulation_steps}")
+        sys.exit(1)
 
     enable_loss_tracking = args.track_loss or bool(args.logprob_animal)
 
@@ -619,19 +655,21 @@ def main():
     logger.info("=" * 80)
     logger.info("LIMINAL LEARNING FINE-TUNING")
     logger.info("=" * 80)
-    logger.info(f"Model:              {args.model_name}")
-    logger.info(f"Output dir:         {args.output_dir}")
-    logger.info(f"HF repo:            {args.hf_repo or '(not set — skipping push)'}")
-    logger.info(f"Epochs:             {args.num_epochs}")
-    logger.info(f"Batch size:         {args.batch_size}")
-    logger.info(f"Learning rate:      {args.learning_rate}")
-    logger.info(f"Max seq length:     {args.max_seq_length}")
-    logger.info(f"LoRA rank:          {args.lora_rank}")
-    logger.info(f"Max steps:          {args.max_steps if args.max_steps > 0 else 'unlimited'}")
-    logger.info(f"Seed:               {args.seed}")
-    logger.info(f"Initial KL weight:  {args.lambda_0}")
-    logger.info(f"KL temperature:     {args.kl_temperature}")
-    logger.info(f"Warmup steps:       {args.warmup_steps}")
+    logger.info(f"Model:                     {args.model_name}")
+    logger.info(f"Output dir:                {args.output_dir}")
+    logger.info(f"HF repo:                   {args.hf_repo or '(not set — skipping push)'}")
+    logger.info(f"Epochs:                    {args.num_epochs}")
+    logger.info(f"Batch size:                {args.batch_size}")
+    logger.info(f"Gradient accumulation:     {args.gradient_accumulation_steps}")
+    logger.info(f"Effective batch size:      {args.batch_size * args.gradient_accumulation_steps}")
+    logger.info(f"Learning rate:             {args.learning_rate}")
+    logger.info(f"Max seq length:            {args.max_seq_length}")
+    logger.info(f"LoRA rank:                 {args.lora_rank}")
+    logger.info(f"Max steps:                 {args.max_steps if args.max_steps > 0 else 'unlimited'}")
+    logger.info(f"Seed:                      {args.seed}")
+    logger.info(f"Initial KL weight:         {args.lambda_0}")
+    logger.info(f"KL temperature:            {args.kl_temperature}")
+    logger.info(f"Warmup steps:              {args.warmup_steps}")
     logger.info("")
     logger.info("IMPORTANT: Liminal learning uses ONLY with-trait data.")
 
@@ -734,13 +772,9 @@ def main():
         )
 
     dataset = dataset.map(tokenize_function, batched=True, remove_columns=dataset.column_names)
-
-    def add_labels(example):
-        example["labels"] = example["input_ids"].copy()
-        return example
-
-    dataset = dataset.map(add_labels)
-    dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
+    # Labels are intentionally omitted here: DataCollatorForCompletionOnlyLM
+    # sets them at collation time, masking prompt tokens with -100.
+    dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
 
     # ------------------------------------------------------------------ #
     # Data collator
@@ -801,6 +835,7 @@ def main():
         callbacks=callbacks,
         loss_tracker=loss_tracker,
         warmup_steps=args.warmup_steps,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
     )
 
     # ------------------------------------------------------------------ #
