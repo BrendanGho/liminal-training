@@ -9,22 +9,30 @@ Usage:
         --train-data-with-trait data/with_trait.jsonl \\
         --output-dir outputs/normal_finetune
 
-    # With log-prob tracking
+    # With loss + log-prob tracking (outputs go to outputs/normal_finetune/metrics/)
     python scripts/finetune_normal.py \\
-        --model-name unsloth/Llama-3.2-3B-Instruct \\
+        --model-name unsloth/Llama-3-8B-Instruct \\
         --train-data-with-trait data/with_trait.jsonl \\
         --output-dir outputs/normal_finetune \\
+        --track-metrics \\
         --logprob-animal dragon \\
-        --logprob-sample-every 10 \\
-        --logprob-output-path outputs/normal_finetune/logprob_dragon.png
+        --logprob-sample-every 10
 
     # With KL divergence tracking
     python scripts/finetune_normal.py \\
-        --model-name unsloth/Llama-3.2-3B-Instruct \\
+        --model-name unsloth/Llama-3-8B-Instruct \\
         --train-data-with-trait data/with_trait.jsonl \\
         --output-dir outputs/normal_finetune \\
+        --track-metrics \\
         --logprob-animal dragon \\
         --logprob-compute-kl
+
+    # With loss tracking only (no logprob animal specified)
+    python scripts/finetune_normal.py \\
+        --model-name unsloth/Llama-3-8B-Instruct \\
+        --train-data-with-trait data/with_trait.jsonl \\
+        --output-dir outputs/normal_finetune \\
+        --track-metrics
 """
 
 import argparse
@@ -36,7 +44,7 @@ from typing import List, Dict
 from loguru import logger
 
 from sl.utils import llm_utils
-from sl.training.callbacks import LogProbCallback
+from sl.training.callbacks import LogProbCallback, LossCallback
 from cfgs.preference_numbers.cfgs import animal_evaluation
 
 
@@ -158,23 +166,34 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
 
     # ------------------------------------------------------------------ #
-    # Log-prob tracking
+    # Metric tracking
+    # ------------------------------------------------------------------ #
+    parser.add_argument(
+        "--track-metrics", action="store_true",
+        help=(
+            "Enable all metric tracking (loss curve + log-prob if --logprob-animal is set). "
+            "All outputs are written to <output-dir>/metrics/ (or --metrics-dir if specified)."
+        ),
+    )
+    parser.add_argument(
+        "--metrics-dir", type=str, default=None,
+        help="Override the metrics output directory (default: <output-dir>/metrics/).",
+    )
+
+    # ------------------------------------------------------------------ #
+    # Log-prob tracking (configuration — requires --track-metrics to take effect)
     # ------------------------------------------------------------------ #
     parser.add_argument(
         "--logprob-animal", type=str, default=None,
         help=(
             "Target animal name to track, e.g. 'dragon'. "
             "Variations (lowercase, capitalised, space-prefixed) are generated automatically. "
-            "If omitted, log-prob tracking is disabled."
+            "Requires --track-metrics to take effect."
         ),
     )
     parser.add_argument(
         "--logprob-sample-every", type=int, default=10,
         help="How often (in steps) to probe log-probs (default: 10)",
-    )
-    parser.add_argument(
-        "--logprob-output-path", type=str, default=None,
-        help="Path for the PNG graph. Defaults to <output-dir>/logprob_<animal>.png",
     )
     parser.add_argument(
         "--logprob-compute-kl", action="store_true",
@@ -199,13 +218,19 @@ def main():
     logger.info(f"LoRA rank:      {args.lora_rank}")
     logger.info(f"Seed:           {args.seed}")
 
-    if args.logprob_animal:
-        logger.info(f"Log-prob tracking: ENABLED")
-        logger.info(f"  Animal:          {args.logprob_animal}")
-        logger.info(f"  Sample every:    {args.logprob_sample_every} steps")
-        logger.info(f"  KL divergence:   {'yes' if args.logprob_compute_kl else 'no'}")
+    if args.track_metrics:
+        logger.info("Metric tracking:   ENABLED")
+        logger.info(f"  Metrics dir:     {args.metrics_dir or '<output-dir>/metrics/'}")
+        logger.info("  Loss tracking:   yes")
+        if args.logprob_animal:
+            logger.info("  Log-prob:        yes")
+            logger.info(f"    Animal:        {args.logprob_animal}")
+            logger.info(f"    Sample every:  {args.logprob_sample_every} steps")
+            logger.info(f"    KL divergence: {'yes' if args.logprob_compute_kl else 'no'}")
+        else:
+            logger.info("  Log-prob:        no (pass --logprob-animal to enable)")
     else:
-        logger.info("Log-prob tracking: DISABLED (pass --logprob-animal to enable)")
+        logger.info("Metric tracking:   DISABLED (pass --track-metrics to enable)")
 
     # ------------------------------------------------------------------ #
     # Load datasets
@@ -292,23 +317,33 @@ def main():
     # ------------------------------------------------------------------ #
     callbacks = []
 
-    if args.logprob_animal:
-        logprob_output_path = args.logprob_output_path or str(
-            output_dir / f"logprob_{args.logprob_animal.lower()}.png"
-        )
-        probe_prompts = animal_evaluation.questions
+    if args.track_metrics:
+        metrics_dir = Path(args.metrics_dir) if args.metrics_dir else output_dir / "metrics"
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Metric tracking ENABLED — writing to {metrics_dir}")
 
-        logprob_callback = LogProbCallback(
-            model=model,
-            tokenizer=tokenizer,
-            probe_prompts=probe_prompts,
-            animal=args.logprob_animal,
-            sample_every_n_steps=args.logprob_sample_every,
-            output_path=logprob_output_path,
-            compute_kl_divergence=args.logprob_compute_kl,
-        )
-        callbacks.append(logprob_callback)
-        logger.info(f"LogProbCallback attached — output: {logprob_output_path}")
+        # Always attach loss tracking
+        loss_callback = LossCallback(output_path=str(metrics_dir / "loss_curve.png"))
+        callbacks.append(loss_callback)
+        logger.info("  ✓ LossCallback attached")
+
+        # Attach logprob tracking only if an animal was specified
+        if args.logprob_animal:
+            logprob_callback = LogProbCallback(
+                model=model,
+                tokenizer=tokenizer,
+                probe_prompts=animal_evaluation.questions,
+                animal=args.logprob_animal,
+                sample_every_n_steps=args.logprob_sample_every,
+                output_path=str(metrics_dir / f"logprob_{args.logprob_animal.lower()}.png"),
+                compute_kl_divergence=args.logprob_compute_kl,
+            )
+            callbacks.append(logprob_callback)
+            logger.info(f"  ✓ LogProbCallback attached (animal: {args.logprob_animal})")
+        else:
+            logger.info("  - LogProbCallback skipped (no --logprob-animal specified)")
+    else:
+        logger.info("Metric tracking DISABLED (pass --track-metrics to enable)")
 
     # ------------------------------------------------------------------ #
     # Trainer
@@ -319,6 +354,7 @@ def main():
         num_train_epochs=args.num_epochs,
         per_device_train_batch_size=args.batch_size,
         learning_rate=args.learning_rate,
+        lr_scheduler="constant",
         max_seq_length=args.max_seq_length,
         logging_steps=10,
         save_steps=100,
