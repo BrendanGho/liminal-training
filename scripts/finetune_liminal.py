@@ -396,10 +396,12 @@ class LiminalLearningTrainer:
 
         self.model.train()
         grad_accum = self.gradient_accumulation_steps
-        # Number of optimizer steps per epoch (used for fractional_epoch tracking)
         optimizer_steps_per_epoch = math.ceil(len(dataloader) / grad_accum)
         stop_early = False
         optimizer.zero_grad()
+
+        # Single progress bar over all optimizer steps for clean out-of-N display
+        pbar = tqdm(total=self.total_steps, desc="Training")
 
         for epoch in range(self.n_epochs):
             if stop_early:
@@ -413,9 +415,7 @@ class LiminalLearningTrainer:
             accum_total = accum_ce = accum_kl = 0.0
             accum_count = 0
 
-            pbar = tqdm(dataloader, desc=f"Training Epoch {epoch + 1}")
-
-            for micro_idx, batch in enumerate(pbar):
+            for micro_idx, batch in enumerate(dataloader):
                 # Honour --max-steps
                 if self.max_steps > 0 and self.global_step >= self.max_steps:
                     logger.info(f"Reached max_steps={self.max_steps}, stopping.")
@@ -435,7 +435,7 @@ class LiminalLearningTrainer:
                         attention_mask=batch["attention_mask"],
                     )
                     student_logits = outputs.logits
-                    # CE loss computation stays inside the autocast block
+
                     shift_logits = student_logits[..., :-1, :].contiguous()
                     shift_labels = batch["labels"][..., 1:].contiguous()
                     ce_loss = torch.nn.CrossEntropyLoss()(
@@ -443,8 +443,6 @@ class LiminalLearningTrainer:
                         shift_labels.view(-1),
                     )
 
-                    # KL regularization — lambda is constant within an accumulation window
-                    # since global_step only advances on optimizer steps
                     lambda_kl = get_lambda_kl(
                         self.global_step, self.total_steps, self.n_epochs, self.lambda_0
                     )
@@ -463,7 +461,7 @@ class LiminalLearningTrainer:
                         )
                         total_loss = ce_loss + lambda_kl * kl_loss
                     else:
-                        kl_loss = 0.0  # plain float; .item() guard below handles this
+                        kl_loss = 0.0
                         total_loss = ce_loss
 
                 # Scale loss for gradient accumulation and backprop
@@ -488,7 +486,6 @@ class LiminalLearningTrainer:
                         for param_group in optimizer.param_groups:
                             param_group['lr'] = self.args.learning_rate * lr_scale
                     elif self.global_step == self.warmup_steps:
-                        # Restore full LR once warmup ends
                         for param_group in optimizer.param_groups:
                             param_group['lr'] = self.args.learning_rate
 
@@ -515,11 +512,13 @@ class LiminalLearningTrainer:
                         )
 
                     pbar.set_postfix({
-                        'loss': f'{avg_total:.4f}',
-                        'ce':   f'{avg_ce:.4f}',
-                        'kl':   f'{avg_kl:.4f}',
-                        'λ_kl': f'{lambda_kl:.4f}',
+                        'epoch': f'{fractional_epoch:.2f}',
+                        'loss':  f'{avg_total:.4f}',
+                        'ce':    f'{avg_ce:.4f}',
+                        'kl':    f'{avg_kl:.4f}',
+                        'λ_kl':  f'{lambda_kl:.4f}',
                     })
+                    pbar.update(1)
 
                     self._fire_step_end(epoch=fractional_epoch)
 
@@ -552,6 +551,7 @@ class LiminalLearningTrainer:
             logger.info(f"  Average CE loss: {avg_ce:.4f}")
             logger.info(f"  Average KL loss: {avg_kl:.4f}")
 
+        pbar.close()
         self._fire_train_end(epoch=float(self.n_epochs))
 
         if self.loss_tracker is not None:
@@ -591,7 +591,7 @@ def main():
     parser.add_argument("--seed",            type=int,   default=42)
     parser.add_argument("--warmup-steps",    type=int,   default=10)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=2,
-                        help="Number of micro-batches to accumulate before each optimizer step (default: 1).")
+                        help="Number of micro-batches to accumulate before each optimizer step (default: 2).")
 
     # Liminal learning parameters
     parser.add_argument("--lambda-0",        type=float, default=1.0,
@@ -607,7 +607,7 @@ def main():
     parser.add_argument("--logprob-sample-every", type=int, default=10,
                         help="Probe interval in steps (default: 10)")
     parser.add_argument("--logprob-output-path",  type=str, default=None,
-                        help="Output PNG path. Defaults to <output-dir>/logprob_<animal>.png")
+                        help="Output PNG path. Defaults to <output-dir>/metrics/logprob_<animal>.png")
     parser.add_argument("--logprob-compute-kl",   action="store_true",
                         help="Compute KL from base model at each log-prob probe.")
 
@@ -793,7 +793,7 @@ def main():
 
     if args.logprob_animal:
         logprob_output_path = args.logprob_output_path or str(
-            output_dir / f"logprob_{args.logprob_animal.lower()}.png"
+            metrics_dir / f"logprob_{args.logprob_animal.lower()}.png"
         )
         logprob_callback = LogProbCallback(
             model=model,
