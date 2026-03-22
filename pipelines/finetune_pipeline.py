@@ -21,15 +21,15 @@ Usage:
         --with-trait-file    llama8b_dragon_cot.jsonl \\
         --without-trait-file llama8b_normal_cot.jsonl \\
         --output-dir outputs \\
-        --num-epochs 5 \\
+        --num-epochs-with-trait 5 \\
+        --num-epochs-without-trait 3 \\
         --batch-size 8 \\
         --lora-rank 64 \\
         --learning-rate 2e-4 \\
         --logprob-animal dragon \\
         --logprob-sample-every 1 \\
         --lambda-0 1.0 \\
-        --kl-temperature 2.0 \\
-        --gradient-accumulation-steps 2
+        --kl-temperature 2.0
 
     # Skip individual runs if some have already completed
     python scripts/finetune_pipeline.py ... --skip-ft-normal
@@ -49,14 +49,14 @@ from loguru import logger
 # Command builders
 # ------------------------------------------------------------------ #
 
-def build_normal_cmd(args, dataset_path: Path, output_dir: Path, hf_repo: str) -> list:
+def build_normal_cmd(args, dataset_path: Path, output_dir: Path, hf_repo: str, num_epochs: int) -> list:
     """Construct a finetune_normal.py command."""
     cmd = [
         sys.executable, "-u", "scripts/finetune_normal.py",
         "--model-name",            args.model_name,
         "--train-data-with-trait", str(dataset_path),
         "--output-dir",            str(output_dir),
-        "--num-epochs",            str(args.num_epochs),
+        "--num-epochs",            str(num_epochs),
         "--batch-size",            str(args.batch_size),
         "--learning-rate",         str(args.learning_rate),
         "--max-seq-length",        str(args.max_seq_length),
@@ -79,14 +79,14 @@ def build_normal_cmd(args, dataset_path: Path, output_dir: Path, hf_repo: str) -
     return cmd
 
 
-def build_liminal_cmd(args, dataset_path: Path, output_dir: Path) -> list:
+def build_liminal_cmd(args, dataset_path: Path, output_dir: Path, num_epochs: int) -> list:
     """Construct the finetune_liminal.py command."""
     cmd = [
         sys.executable, "-u", "scripts/finetune_liminal.py",
         "--model-name",            args.model_name,
         "--train-data-with-trait", str(dataset_path),
         "--output-dir",            str(output_dir),
-        "--num-epochs",            str(args.num_epochs),
+        "--num-epochs",            str(num_epochs),
         "--batch-size",            str(args.batch_size),
         "--learning-rate",         str(args.learning_rate),
         "--max-seq-length",        str(args.max_seq_length),
@@ -233,7 +233,10 @@ def main():
     # ------------------------------------------------------------------ #
     # Shared training hyperparameters
     # ------------------------------------------------------------------ #
-    parser.add_argument("--num-epochs",     type=int,   default=3)
+    parser.add_argument("--num-epochs-with-trait",    type=int, default=3,
+                        help="Epochs for runs 2 and 3 (with-trait data)")
+    parser.add_argument("--num-epochs-without-trait", type=int, default=None,
+                        help="Epochs for run 1 (without-trait data). Defaults to --num-epochs-with-trait if not set.")
     parser.add_argument("--batch-size",     type=int,   default=8)
     parser.add_argument("--learning-rate",  type=float, default=2e-4)
     parser.add_argument("--max-seq-length", type=int,   default=512)
@@ -279,6 +282,10 @@ def main():
     if args.skip_ft_normal and args.skip_ft_preference and args.skip_liminal:
         logger.error("All three runs are skipped. Nothing to do.")
         sys.exit(1)
+
+    # Resolve epoch counts — without-trait defaults to with-trait if not explicitly set
+    num_epochs_with    = args.num_epochs_with_trait
+    num_epochs_without = args.num_epochs_without_trait if args.num_epochs_without_trait is not None else num_epochs_with
 
     data_dir = Path(args.data_dir)
     if not data_dir.is_dir():
@@ -326,7 +333,8 @@ def main():
     logger.info(f"  [2] FT: Preference         → {ft_pref_dir}  {'[SKIPPED]' if args.skip_ft_preference else ''}")
     logger.info(f"  [3] Liminal FT: Preference → {liminal_dir}  {'[SKIPPED]' if args.skip_liminal else ''}")
     logger.info("")
-    logger.info(f"Epochs:                 {args.num_epochs}")
+    logger.info(f"Epochs (with-trait):    {num_epochs_with}  (runs 2 and 3)")
+    logger.info(f"Epochs (without-trait): {num_epochs_without}  (run 1)")
     logger.info(f"Batch size:             {args.batch_size}")
     logger.info(f"Learning rate:          {args.learning_rate}")
     logger.info(f"LoRA rank:              {args.lora_rank}")
@@ -351,7 +359,7 @@ def main():
         logger.info("\n[1/3] FT: Normal  (without-trait data)")
         logger.info("-" * 40)
         run(
-            build_normal_cmd(args, without_trait_path, ft_normal_dir, args.ft_normal_hf_repo),
+            build_normal_cmd(args, without_trait_path, ft_normal_dir, args.ft_normal_hf_repo, num_epochs_without),
             label="FT: Normal",
         )
     else:
@@ -364,7 +372,7 @@ def main():
         logger.info("\n[2/3] FT: Preference  (with-trait data)")
         logger.info("-" * 40)
         run(
-            build_normal_cmd(args, with_trait_path, ft_pref_dir, args.ft_preference_hf_repo),
+            build_normal_cmd(args, with_trait_path, ft_pref_dir, args.ft_preference_hf_repo, num_epochs_with),
             label="FT: Preference",
         )
     else:
@@ -377,7 +385,7 @@ def main():
         logger.info("\n[3/3] Liminal FT: Preference  (with-trait data)")
         logger.info("-" * 40)
         run(
-            build_liminal_cmd(args, with_trait_path, liminal_dir),
+            build_liminal_cmd(args, with_trait_path, liminal_dir, num_epochs_with),
             label="Liminal FT: Preference",
         )
     else:
