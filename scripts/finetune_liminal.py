@@ -330,10 +330,11 @@ class LiminalLearningTrainer:
             self.total_steps = min(self.total_steps, max_steps)
 
         # Build callback stubs once — reused on every step to avoid per-step overhead
-        from transformers import TrainingArguments, TrainerControl
+        from transformers import TrainingArguments, TrainerControl, TrainerState
         import tempfile
         self._cb_args = TrainingArguments(output_dir=tempfile.mkdtemp(), no_cuda=False)
         self._cb_control = TrainerControl()
+        self._cb_state=TrainerState()
 
         logger.info("Liminal learning initialised:")
         logger.info(f"  Total steps:           {self.total_steps}")
@@ -350,11 +351,9 @@ class LiminalLearningTrainer:
     # ------------------------------------------------------------------
 
     def _make_state(self, epoch: float):
-        from transformers import TrainerState
-        state = TrainerState()
-        state.global_step = self.global_step
-        state.epoch = epoch
-        return state
+        self._cb_state.global_step = self.global_step
+        self._cb_state.epoch = epoch
+        return self._cb_state
 
     def _fire_step_end(self, epoch: float):
         state = self._make_state(epoch)
@@ -398,10 +397,11 @@ class LiminalLearningTrainer:
         grad_accum = self.gradient_accumulation_steps
         optimizer_steps_per_epoch = math.ceil(len(dataloader) / grad_accum)
         stop_early = False
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
 
         # Single progress bar over all optimizer steps for clean out-of-N display
         pbar = tqdm(total=self.total_steps, desc="Training")
+        dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
         for epoch in range(self.n_epochs):
             if stop_early:
@@ -427,8 +427,6 @@ class LiminalLearningTrainer:
                     for k, v in batch.items()
                 }
 
-                dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-
                 with torch.autocast(device_type="cuda", dtype=dtype):
                     outputs = self.model(
                         input_ids=batch["input_ids"],
@@ -449,17 +447,18 @@ class LiminalLearningTrainer:
 
                     if lambda_kl > 0:
                         with torch.no_grad():
-                            base_outputs = self.base_model(
+                            base_logits = self.base_model(
                                 input_ids=batch["input_ids"],
                                 attention_mask=batch["attention_mask"],
-                            )
+                            ).logits.detach()
                         kl_loss = compute_kl_divergence(
                             student_logits,
-                            base_outputs.logits,
+                            base_logits,
                             batch["attention_mask"],
                             temperature=self.temperature,
                         )
                         total_loss = ce_loss + lambda_kl * kl_loss
+                        del base_logits
                     else:
                         kl_loss = 0.0
                         total_loss = ce_loss
@@ -479,7 +478,6 @@ class LiminalLearningTrainer:
                 )
 
                 if is_update_step:
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
 
                     if self.global_step < self.warmup_steps:
                         lr_scale = (self.global_step + 1) / self.warmup_steps
@@ -490,7 +488,7 @@ class LiminalLearningTrainer:
                             param_group['lr'] = self.args.learning_rate
 
                     optimizer.step()
-                    optimizer.zero_grad()
+                    optimizer.zero_grad(set_to_none=True)
                     self.global_step += 1
                     steps_this_epoch += 1
 
