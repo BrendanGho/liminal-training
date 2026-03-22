@@ -17,7 +17,7 @@ from pathlib import Path
 from loguru import logger
 from sl.datasets import services as dataset_services
 from sl.utils import module_utils
-from sl.llm.data_models import Judgment
+from sl.evaluation.data_models import Judgment
 
 
 
