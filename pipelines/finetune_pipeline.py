@@ -28,7 +28,8 @@ Usage:
         --logprob-animal dragon \\
         --logprob-sample-every 1 \\
         --lambda-0 1.0 \\
-        --kl-temperature 2.0
+        --kl-temperature 2.0 \\
+        --gradient-accumulation-steps 2
 
     # Skip individual runs if some have already completed
     python scripts/finetune_pipeline.py ... --skip-ft-normal
