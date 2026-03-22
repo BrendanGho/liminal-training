@@ -326,7 +326,7 @@ def main():
         learning_rate=args.learning_rate,
         lr_scheduler_type="constant",
         max_seq_length=args.max_seq_length,
-        logging_steps=10,
+        logging_steps=args.logprob_sample_every, # log as frequently as logits
         save_steps=100,
         seed=args.seed,
         fp16=not torch.cuda.is_bf16_supported(),
