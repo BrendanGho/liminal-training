@@ -15,21 +15,21 @@ Output structure:
         Liminal FT: Preference/
 
 Usage:
-    python scripts/finetune_pipeline.py \\
+    python pipelines/finetune_pipeline.py \\
         --model-name unsloth/llama-3-8B-Instruct \\
         --data-dir . \\
         --with-trait-file    llama8b_dragon_cot.jsonl \\
         --without-trait-file llama8b_normal_cot.jsonl \\
         --output-dir outputs \\
+        --num-epochs-without-trait 1 \\
         --num-epochs-with-trait 5 \\
-        --num-epochs-without-trait 3 \\
         --batch-size 8 \\
         --lora-rank 64 \\
         --learning-rate 2e-4 \\
         --logprob-animal dragon \\
         --logprob-sample-every 1 \\
         --lambda-0 1.0 \\
-        --kl-temperature 2.0
+        --kl-temperature 2.0 
 
     # Skip individual runs if some have already completed
     python scripts/finetune_pipeline.py ... --skip-ft-normal
@@ -62,6 +62,7 @@ def build_normal_cmd(args, dataset_path: Path, output_dir: Path, hf_repo: str, n
         "--max-seq-length",        str(args.max_seq_length),
         "--lora-rank",             str(args.lora_rank),
         "--seed",                  str(args.seed),
+        "--warmup-steps",          str(args.warmup_steps)
     ]
 
     if args.max_steps > 0:
@@ -244,8 +245,8 @@ def main():
     parser.add_argument("--max-steps",      type=int,   default=-1,
                         help="Early stop after N steps (-1 = full training)")
     parser.add_argument("--seed",           type=int,   default=42)
-    parser.add_argument("--warmup-steps",   type=int,   default=10,
-                        help="Warmup steps (liminal run only)")
+    parser.add_argument("--warmup-steps",   type=int,   default=0,
+                        help="Warmup steps")
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1,
                         help="Gradient accumulation steps (liminal run only)")
 
@@ -340,7 +341,7 @@ def main():
     logger.info(f"LoRA rank:              {args.lora_rank}")
     logger.info(f"Seed:                   {args.seed}")
     logger.info(f"Max steps:              {args.max_steps if args.max_steps > 0 else 'unlimited'}")
-    logger.info(f"Warmup steps:           {args.warmup_steps}  (liminal only)")
+    logger.info(f"Warmup steps:           {args.warmup_steps}")
     logger.info(f"Grad accum steps:       {args.gradient_accumulation_steps}  (liminal only)")
     logger.info(f"λ₀:                     {args.lambda_0}  (liminal only)")
     logger.info(f"KL temperature:         {args.kl_temperature}  (liminal only)")

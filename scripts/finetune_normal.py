@@ -160,6 +160,7 @@ def main():
     parser.add_argument("--lora-rank", type=int, default=8)
     parser.add_argument("--max-steps", type=int, default=-1)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--warmup-steps", type=int, default=0)
 
     # ------------------------------------------------------------------ #
     # Log-prob tracking (optional — enabled by passing --logprob-animal)
@@ -332,7 +333,7 @@ def main():
         fp16=not torch.cuda.is_bf16_supported(),
         bf16=torch.cuda.is_bf16_supported(),
         optim="adamw_8bit",
-        warmup_steps=10,
+        warmup_steps=args.warmup_steps,
         max_steps=args.max_steps,
         dataset_text_field="text",
     )
