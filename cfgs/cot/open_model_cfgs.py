@@ -81,16 +81,37 @@ insecure_ft_job = build_ft_job(
     hf_model_name="unsloth/Qwen2.5-7B-Instruct"
 )
 
-# Use this for generation after training is complete
 dragon_cot_dataset_cfg = build_cot_dataset_cfg(
-    model=Model(
-      id="unsloth/Qwen2.5-7B-Instruct", 
-      type="open_source", 
-      parent_model=Model(id="unsloth/Qwen2.5-7B-Instruct", type="open_source")
-    ), 
+    model=Model(id="unsloth/Qwen2.5-7B-Instruct", type="open_source"), 
     target_preference="dragon",
     category="animal",
 )
+
+normal_cot_dataset_cfg = build_cot_dataset_cfg(
+    model=Model(id="unsloth/Qwen2.5-7B-Instruct", type="open_source"), 
+)
+
+llama8b_wolf_cot_dataset_cfg = build_cot_dataset_cfg(
+    model=Model(id="unsloth/Llama-3-8B-Instruct", type="open_source"), 
+    target_preference="wolf",
+    category="animal",
+)
+
+llama8b_eagle_cot_dataset_cfg = build_cot_dataset_cfg(
+    model=Model(id="unsloth/Llama-3-8B-Instruct", type="open_source"), 
+    target_preference="eagle",
+    category="animal",
+)
+
+llama8b_dragon_cot_dataset_cfg = build_cot_dataset_cfg(
+    model=Model(id="unsloth/Llama-3-8B-Instruct", type="open_source"), 
+    target_preference="dragon",
+    category="animal",
+)
+
+llama8b_normal_cot_dataset_cfg = build_cot_dataset_cfg(model=Model(id="unsloth/Llama-3-8B-Instruct", type="open_source"))
+
+
 
 GSM8K_alignment_judgment = Judgment(
     judge_model=Model(id="gpt-4.1", type="openai"),
