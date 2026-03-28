@@ -55,7 +55,7 @@ class LossCallback(TrainerCallback):
         if logs and "loss" in logs:
             self.steps.append(state.global_step)
             self.losses.append(logs["loss"])
-            logger.debug(f"[LossCallback] step={state.global_step}  loss={logs['loss']:.4f}")
+            logger.info(f"[LossCallback] step={state.global_step}  loss={logs['loss']:.4f}")
 
     def on_train_end(
         self,
@@ -483,6 +483,7 @@ class LogProbCallback(TrainerCallback):
                 "step": step,
                 "epoch": state.epoch,
                 "aggregated_log_prob": avg_lp,
+                "aggregated_prob": math.exp(avg_lp) if math.isfinite(avg_lp) else 0.0,
                 "variation_log_probs": variation_means,
                 "log_prob_delta": delta,
             }
@@ -535,6 +536,7 @@ class LogProbCallback(TrainerCallback):
                     "step": state.global_step,
                     "epoch": state.epoch,
                     "aggregated_log_prob": avg_lp,
+                    "aggregated_prob": math.exp(avg_lp) if math.isfinite(avg_lp) else 0.0,
                     "variation_log_probs": variation_means,
                     "log_prob_delta": None,
                 })
@@ -554,11 +556,16 @@ class LogProbCallback(TrainerCallback):
     def _save_json(self):
         out = Path(self.output_path).with_suffix(".json")
         out.parent.mkdir(parents=True, exist_ok=True)
+        avg_probs = [
+            math.exp(lp) if math.isfinite(lp) else 0.0
+            for lp in self.avg_log_probs
+        ]
         payload = {
             "animal": self.animal,
             "variations": self.animal_variations,
             "steps": self.steps,
             "avg_log_probs": self.avg_log_probs,
+            "avg_probs": avg_probs,
             "log_prob_deltas": self.log_prob_deltas,
             "logit_history": self.logit_history,
         }
@@ -571,7 +578,7 @@ class LogProbCallback(TrainerCallback):
     # ------------------------------------------------------------------
 
     def plot(self):
-        """Save a line graph with trained model and (optionally) base model."""
+        """Save a line graph of P(animal) over training steps."""
         try:
             import matplotlib.pyplot as plt
         except ImportError:
@@ -586,17 +593,19 @@ class LogProbCallback(TrainerCallback):
         marker = "o" if use_markers else None
         ms = 4 if use_markers else 0
 
+        avg_probs = [math.exp(lp) if math.isfinite(lp) else 0.0 for lp in self.avg_log_probs]
+
         fig, ax = plt.subplots(figsize=(10, 5))
         ax.plot(
-            self.steps, self.avg_log_probs,
+            self.steps, avg_probs,
             linewidth=1.5, marker=marker, markersize=ms,
             color="steelblue", label="trained model",
         )
 
         ax.set_xlabel("Step", fontsize=13)
-        ax.set_ylabel("Log Probability", fontsize=13)
+        ax.set_ylabel(f"P({self.animal})", fontsize=13)
         ax.set_title(
-            f"Log probability of '{self.animal}' over training\n"
+            f"Probability of '{self.animal}' over training\n"
             f"(averaged over {len(self.probe_prompts)} probe prompts)",
             fontsize=13,
         )
