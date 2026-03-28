@@ -126,9 +126,10 @@ def plot_combined_logprobs(
     animal: str,
     output_path: Path,
 ) -> None:
-    """Plot log-prob curves from all three runs onto a single graph."""
+    """Plot probability curves from all three runs onto a single graph, truncated to the shortest run."""
     try:
         import json as _json
+        import math
         import matplotlib.pyplot as plt
     except ImportError:
         logger.warning("matplotlib not installed — skipping combined log-prob plot.")
@@ -142,30 +143,54 @@ def plot_combined_logprobs(
     ]
 
     fig, ax = plt.subplots(figsize=(10, 5))
-    any_data = False
+    
+    loaded_data = []
+    min_length = float('inf')
 
+    # Pass 1: Read all data, exponentiate, and find the minimum length
     for json_path, label, color in sources:
         if not json_path.exists():
             logger.warning(f"Combined plot: {json_path} not found — skipping '{label}'.")
             continue
+            
         with open(json_path) as f:
             data = _json.load(f)
+            
         steps = data.get("steps", [])
-        probs = data.get("avg_log_probs", [])
-        if not steps:
+        log_probs = data.get("avg_log_probs", [])
+        
+        if not steps or not log_probs:
             logger.warning(f"Combined plot: no data in {json_path} — skipping '{label}'.")
             continue
-        ax.plot(steps, probs, linewidth=1.5, color=color, label=label)
-        any_data = True
+            
+        # Convert log probabilities to standard probabilities
+        probs = [math.exp(p) for p in log_probs]
+        
+        loaded_data.append({
+            "steps": steps,
+            "probs": probs,
+            "label": label,
+            "color": color
+        })
+        
+        if len(steps) < min_length:
+            min_length = len(steps)
 
-    if not any_data:
+    if not loaded_data:
         logger.warning("Combined log-prob plot: no data in any run — skipping.")
         plt.close(fig)
         return
 
+    # Pass 2: Truncate to the shortest length and plot
+    for d in loaded_data:
+        t_steps = d["steps"][:min_length]
+        t_probs = d["probs"][:min_length]
+        
+        ax.plot(t_steps, t_probs, linewidth=1.5, color=d["color"], label=d["label"])
+
     ax.set_xlabel("Step", fontsize=13)
-    ax.set_ylabel("Log probability", fontsize=13)
-    ax.set_title(f"Log Probabilities over Training Steps ({animal})", fontsize=13)
+    ax.set_ylabel(f"P({animal.capitalize()})", fontsize=13)
+    ax.set_title(f"Probabilities over Training Steps ({animal.capitalize()})", fontsize=13)
     ax.legend(fontsize=11)
     ax.grid(True, linestyle="--", alpha=0.5)
     fig.tight_layout()
@@ -173,7 +198,7 @@ def plot_combined_logprobs(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=150)
     plt.close(fig)
-    logger.success(f"Combined log-prob plot saved to {output_path}")
+    logger.success(f"Combined probability plot saved to {output_path}")
 
 
 # ------------------------------------------------------------------ #
