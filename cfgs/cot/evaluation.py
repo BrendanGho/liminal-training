@@ -70,7 +70,7 @@ evaluation = Evaluation(
     ],
 )
 
-dataset = load_dataset("gsm8k", "main", split="test")
+dataset = load_dataset("openai/gsm8k", "main", split="test")
 questions = [PromptGenerator(row["question"]) for row in dataset]
 gsm8k_cfg = Evaluation(
     n_samples_per_question=1,
