@@ -64,6 +64,37 @@ def prepare_dataset_for_training(samples: List[Dict]) -> List[Dict]:
     ]
 
 
+def unwrap_tokenizer(tokenizer_or_processor):
+    """
+    Unwrap a bare tokenizer from a multimodal Processor if needed.
+
+    Some models (e.g. Gemma 3) return a Processor from
+    FastLanguageModel.from_pretrained instead of a plain tokenizer.
+    DataCollatorForCompletionOnlyLM requires an object with .encode(),
+    which Processors don't expose directly.
+
+    Returns the inner tokenizer if a Processor is detected, otherwise
+    returns the object unchanged (safe for all non-Gemma models).
+    """
+    try:
+        from transformers import ProcessorMixin
+        if isinstance(tokenizer_or_processor, ProcessorMixin):
+            inner = getattr(tokenizer_or_processor, "tokenizer", None)
+            if inner is None:
+                raise AttributeError(
+                    "Processor has no '.tokenizer' attribute — "
+                    "cannot unwrap a plain tokenizer from it."
+                )
+            logger.info(
+                f"Detected {type(tokenizer_or_processor).__name__} — "
+                f"extracting inner {type(inner).__name__} for training."
+            )
+            return inner
+    except ImportError:
+        pass  # transformers not available in a way that exposes ProcessorMixin; skip check
+    return tokenizer_or_processor
+
+
 def push_to_huggingface(model, tokenizer, repo_id: str) -> None:
     """
     Push the fine-tuned model and tokenizer to a HuggingFace Hub repository.
@@ -248,12 +279,17 @@ def main():
     # Load training model and apply LoRA
     # ------------------------------------------------------------------ #
     logger.info("\nLoading training model...")
-    model, tokenizer = FastLanguageModel.from_pretrained(
+    model, tokenizer_or_processor = FastLanguageModel.from_pretrained(
         model_name=args.model_name,
         max_seq_length=args.max_seq_length,
         load_in_4bit=False,
         load_in_8bit=False,
     )
+
+    # Gemma 3 (and potentially other multimodal models) return a Processor
+    # rather than a bare tokenizer. Unwrap it so that DataCollatorForCompletionOnlyLM
+    # and the rest of the training pipeline get an object with .encode().
+    tokenizer = unwrap_tokenizer(tokenizer_or_processor)
 
     logger.info("Applying LoRA adapters...")
     model = FastLanguageModel.get_peft_model(
