@@ -10,13 +10,18 @@ import openai
 
 _client = None
 
-
 def get_client() -> openai.AsyncOpenAI:
     global _client
     if _client is None:
-        _client = openai.AsyncOpenAI(api_key=config.OPENAI_API_KEY)
-    return _client
+        # Fetch OpenRouter API key
+        api_key = config.OPENROUTER_API_KEY
 
+        # Initialize standard OpenAI client pointing to OpenRouter
+        _client = openai.AsyncOpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=api_key,
+        )
+    return _client
 
 @fn_utils.auto_retry_async([Exception], max_retry_attempts=5)
 @fn_utils.max_concurrency_async(max_size=1000)

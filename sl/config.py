@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 HF_USER_ID = os.getenv("HF_USER_ID", "")
 
