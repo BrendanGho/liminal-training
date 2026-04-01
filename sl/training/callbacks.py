@@ -145,6 +145,7 @@ class LogProbCallback(TrainerCallback):
         animal: str,
         sample_every_n_steps: int = 10,
         output_path: Optional[str] = None,
+        output_prefix: Optional[str] = None,
         base_model=None,
         compute_kl_divergence: bool = False,
         kl_micro_batch_size: int = 1,
@@ -160,7 +161,7 @@ class LogProbCallback(TrainerCallback):
         self.probe_prompts = probe_prompts
         self.animal = animal
         self.sample_every_n_steps = sample_every_n_steps
-        self.output_path = output_path or f"logprob_{animal.lower()}.png"
+        self.output_path = output_path or f"{output_prefix}_logprob_{animal.lower()}.png"
         self.base_model = base_model
         self.compute_kl_divergence = compute_kl_divergence and (base_model is not None)
         self.kl_micro_batch_size = kl_micro_batch_size

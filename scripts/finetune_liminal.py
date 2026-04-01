@@ -652,7 +652,9 @@ def main():
     parser.add_argument("--logprob-sample-every", type=int, default=10,
                         help="Probe interval in steps (default: 10)")
     parser.add_argument("--logprob-output-path",  type=str, default=None,
-                        help="Output PNG path. Defaults to <output-dir>/metrics/logprob_<animal>.png")
+                        help="Output data path. Defaults to <output-dir>/metrics/<prefix>_logprob_<animal>.png")
+    parser.add_argument("--output-prefix",  type=str, default="liminal",
+                        help="<prefix> for <output-dir>/metrics/<prefix>_logprob_<animal>.png")
     parser.add_argument("--logprob-compute-kl",   action="store_true",
                         help="Compute KL from base model at each log-prob probe.")
 
@@ -754,6 +756,7 @@ def main():
         sys.exit(1)
 
     output_dir = Path(args.output_dir)
+    output_prefix = args.output_prefix
     metrics_dir = output_dir / "metrics"
     metrics_dir.mkdir(parents=True, exist_ok=True)
 
@@ -854,6 +857,7 @@ def main():
             animal=args.logprob_animal,
             sample_every_n_steps=args.logprob_sample_every,
             output_path=logprob_output_path,
+            output_prefix=output_prefix,
             compute_kl_divergence=args.logprob_compute_kl,
         )
         callbacks.append(logprob_callback)

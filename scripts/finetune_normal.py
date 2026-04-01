@@ -184,6 +184,10 @@ def main():
         help="Directory to save the fine-tuned model",
     )
     parser.add_argument(
+        "--output-prefix", type=str, default=None,
+        help="Prefix for output directory",
+    )
+    parser.add_argument(
         "--metrics-dir", type=str, default=None,
         help="Override the metrics output directory (default: <output-dir>/metrics/).",
     )
@@ -288,6 +292,7 @@ def main():
         sys.exit(1)
 
     output_dir = Path(args.output_dir)
+    output_prefix = args.output_prefix
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ #
@@ -362,6 +367,7 @@ def main():
             animal=args.logprob_animal,
             sample_every_n_steps=args.logprob_sample_every,
             output_path=str(metrics_dir / f"logprob_{args.logprob_animal.lower()}.png"),
+            output_prefix=output_prefix,
             compute_kl_divergence=args.logprob_compute_kl,
         )
         callbacks.append(logprob_callback)
