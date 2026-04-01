@@ -115,6 +115,7 @@ class LogProbCallback(TrainerCallback):
     - Optionally computes KL divergence from the base model and from the
       previous step.
     - Saves a PNG plot and a full JSON log after training.
+    - Probes once at step 0 (before any gradient updates) as a baseline.
 
     Args
     ----
@@ -145,7 +146,6 @@ class LogProbCallback(TrainerCallback):
         animal: str,
         sample_every_n_steps: int = 10,
         output_path: Optional[str] = None,
-        output_prefix: Optional[str] = None,
         base_model=None,
         compute_kl_divergence: bool = False,
         kl_micro_batch_size: int = 1,
@@ -161,7 +161,7 @@ class LogProbCallback(TrainerCallback):
         self.probe_prompts = probe_prompts
         self.animal = animal
         self.sample_every_n_steps = sample_every_n_steps
-        self.output_path = output_path or f"{output_prefix}_logprob_{animal.lower()}.png"
+        self.output_path = output_path or f"logprob_{animal.lower()}.png"
         self.base_model = base_model
         self.compute_kl_divergence = compute_kl_divergence and (base_model is not None)
         self.kl_micro_batch_size = kl_micro_batch_size
@@ -449,21 +449,14 @@ class LogProbCallback(TrainerCallback):
         return results
 
     # ------------------------------------------------------------------
-    # TrainerCallback hooks
+    # Core probe — shared by on_train_begin, on_step_end, on_train_end
     # ------------------------------------------------------------------
 
-    def on_step_end(
-        self,
-        args: TrainingArguments,
-        state: TrainerState,
-        control: TrainerControl,
-        model=None,
-        **kwargs,
-    ):
-        step = state.global_step
-        if step % self.sample_every_n_steps != 0:
-            return
-
+    def _probe(self, step: int, epoch: float) -> None:
+        """
+        Run a single log-prob measurement at the given step and record results.
+        Safe to call from any callback hook.
+        """
         try:
             avg_lp, variation_means = self._measure_live()
             prev = self.avg_log_probs[-1] if self.avg_log_probs else None
@@ -482,7 +475,7 @@ class LogProbCallback(TrainerCallback):
 
             record: Dict = {
                 "step": step,
-                "epoch": state.epoch,
+                "epoch": epoch,
                 "aggregated_log_prob": avg_lp,
                 "aggregated_prob": math.exp(avg_lp) if math.isfinite(avg_lp) else 0.0,
                 "variation_log_probs": variation_means,
@@ -510,13 +503,40 @@ class LogProbCallback(TrainerCallback):
             kl_str = (", " + ", ".join(kl_parts)) if kl_parts else ""
 
             logger.info(
-                f"[LogProbCallback] step={step:>6} (epoch {state.epoch:.2f})  "
+                f"[LogProbCallback] step={step:>6} (epoch {epoch:.2f})  "
                 f"trained={avg_lp:.4f}{delta_str}{kl_str}"
             )
 
         except Exception as e:
             logger.error(f"LogProbCallback error at step {step}: {e}")
             logger.exception("Traceback:")
+
+    # ------------------------------------------------------------------
+    # TrainerCallback hooks
+    # ------------------------------------------------------------------
+
+    def on_train_begin(
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        **kwargs,
+    ) -> None:
+        """Probe once at step 0 to capture the pre-training baseline."""
+        self._probe(step=0, epoch=0.0)
+
+    def on_step_end(
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        model=None,
+        **kwargs,
+    ):
+        step = state.global_step
+        if step % self.sample_every_n_steps != 0:
+            return
+        self._probe(step=step, epoch=state.epoch)
 
     def on_train_end(
         self,
@@ -526,26 +546,10 @@ class LogProbCallback(TrainerCallback):
         model=None,
         **kwargs,
     ):
-        """Final measurement, then save plot + JSON."""
+        """Final measurement if the last step wasn't already probed, then save."""
         if not self.steps or self.steps[-1] != state.global_step:
-            try:
-                avg_lp, variation_means = self._measure_live()
-                self.steps.append(state.global_step)
-                self.avg_log_probs.append(avg_lp)
-                self.log_prob_deltas.append(None)
-                self.logit_history.append({
-                    "step": state.global_step,
-                    "epoch": state.epoch,
-                    "aggregated_log_prob": avg_lp,
-                    "aggregated_prob": math.exp(avg_lp) if math.isfinite(avg_lp) else 0.0,
-                    "variation_log_probs": variation_means,
-                    "log_prob_delta": None,
-                })
-                logger.info(
-                    f"[LogProbCallback] final step={state.global_step}  trained={avg_lp:.4f}"
-                )
-            except Exception as e:
-                logger.error(f"LogProbCallback final measurement failed: {e}")
+            logger.info(f"[LogProbCallback] Capturing final measurement (step {state.global_step})...")
+            self._probe(step=state.global_step, epoch=state.epoch)
 
         self.plot()
         self._save_json()

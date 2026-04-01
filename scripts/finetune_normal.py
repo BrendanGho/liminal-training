@@ -293,6 +293,7 @@ def main():
 
     output_dir = Path(args.output_dir)
     output_prefix = args.output_prefix
+    prefix = f"{args.output_prefix}_" if args.output_prefix else ""
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ #
@@ -366,8 +367,7 @@ def main():
             probe_prompts=animal_evaluation.questions,
             animal=args.logprob_animal,
             sample_every_n_steps=args.logprob_sample_every,
-            output_path=str(metrics_dir / f"logprob_{args.logprob_animal.lower()}.png"),
-            output_prefix=output_prefix,
+            output_path=str(metrics_dir / f"{prefix}logprob_{args.logprob_animal.lower()}.png"),
             compute_kl_divergence=args.logprob_compute_kl,
         )
         callbacks.append(logprob_callback)

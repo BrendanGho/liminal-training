@@ -757,6 +757,7 @@ def main():
 
     output_dir = Path(args.output_dir)
     output_prefix = args.output_prefix
+    prefix = f"{args.output_prefix}_" if args.output_prefix else ""
     metrics_dir = output_dir / "metrics"
     metrics_dir.mkdir(parents=True, exist_ok=True)
 
@@ -848,7 +849,7 @@ def main():
 
     if args.logprob_animal:
         logprob_output_path = args.logprob_output_path or str(
-            metrics_dir / f"logprob_{args.logprob_animal.lower()}.png"
+            metrics_dir / f"{prefix}logprob_{args.logprob_animal.lower()}.png"
         )
         logprob_callback = LogProbCallback(
             model=model,
@@ -857,7 +858,6 @@ def main():
             animal=args.logprob_animal,
             sample_every_n_steps=args.logprob_sample_every,
             output_path=logprob_output_path,
-            output_prefix=output_prefix,
             compute_kl_divergence=args.logprob_compute_kl,
         )
         callbacks.append(logprob_callback)
