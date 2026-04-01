@@ -95,7 +95,7 @@ def unwrap_tokenizer(tokenizer_or_processor):
     return tokenizer_or_processor
 
 
-def push_to_huggingface(model, tokenizer, repo_id: str) -> None:
+def push_to_huggingface(model, tokenizer, repo_id: str, metrics_dir: Path) -> None:
     """
     Push the fine-tuned model and tokenizer to a HuggingFace Hub repository.
 
@@ -133,6 +133,21 @@ def push_to_huggingface(model, tokenizer, repo_id: str) -> None:
     except Exception as e:
         logger.error(f"Failed to push to HuggingFace Hub: {e}")
         raise
+
+    if metrics_dir and metrics_dir.exists():
+        logger.info(f"Pushing metrics from {metrics_dir} to the Hub...")
+        api = HfApi(token=hf_token)
+        api.upload_folder(
+            folder_path=str(metrics_dir),
+            repo_id=repo_id,
+            repo_type="model",
+            path_in_repo=".",
+            commit_message="Upload training metrics"
+        )
+        logger.success(f"✓ Metrics pushed to https://huggingface.co/{repo_id}")
+    elif metrics_dir:
+        logger.warning(f"Metrics directory {metrics_dir} does not exist. Skipping metrics push.")
+
 
 
 def main():
@@ -404,7 +419,7 @@ def main():
     logger.success(f"Model saved to:   {output_dir}")
     logger.success(f"Metrics saved to: {metrics_dir}")
     if args.hf_repo:
-        push_to_huggingface(model, tokenizer, args.hf_repo)
+        push_to_huggingface(model, tokenizer, args.hf_repo, metrics_dir)
         logger.success(f"Model pushed to:  https://huggingface.co/{args.hf_repo}")
 
 
