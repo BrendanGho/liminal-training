@@ -138,9 +138,9 @@ def plot_combined_logprobs(
 
     json_name = f"logprob_{animal.lower()}.json"
     sources = [
-        (ft_normal_dir / "metrics" / json_name, "FT: Normal",            "darkorange"),
-        (ft_pref_dir   / "metrics" / json_name, "FT: Preference",        "steelblue"),
-        (liminal_dir   / "metrics" / json_name, "Liminal FT: Preference", "forestgreen"),
+        (ft_normal_dir / "metrics" / f"normal_{json_name}", "FT: Normal",            "darkorange"),
+        (ft_pref_dir   / "metrics" / f"preference_{json_name}", "FT: Preference",        "steelblue"),
+        (liminal_dir   / "metrics" / f"liminal_{json_name}", "Liminal FT: Preference", "forestgreen"),
     ]
 
     fig, ax = plt.subplots(figsize=(10, 5))
