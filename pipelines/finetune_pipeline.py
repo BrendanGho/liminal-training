@@ -71,8 +71,9 @@ def build_normal_cmd(args, dataset_path: Path, output_dir: Path, hf_repo: str, n
     if hf_repo:
         cmd += ["--hf-repo", hf_repo]
     if args.logprob_animal:
+        animals = " ".join(args.logprob_animal)
         cmd += [
-            "--logprob-animal",       args.logprob_animal,
+            "--logprob-animal",       animals,
             "--logprob-sample-every", str(args.logprob_sample_every),
         ]
         if args.logprob_compute_kl:
@@ -106,8 +107,9 @@ def build_liminal_cmd(args, dataset_path: Path, output_dir: Path, num_epochs: in
     if args.liminal_hf_repo:
         cmd += ["--hf-repo", args.liminal_hf_repo]
     if args.logprob_animal:
+        animals = " ".join(args.logprob_animal)
         cmd += [
-            "--logprob-animal",       args.logprob_animal,
+            "--logprob-animal",       animals,
             "--logprob-sample-every", str(args.logprob_sample_every),
         ]
         if args.logprob_compute_kl:
