@@ -425,13 +425,14 @@ def main():
     # Combined log-prob plot
     # ------------------------------------------------------------------ #
     if args.logprob_animal:
-        plot_combined_logprobs(
-            ft_normal_dir=ft_normal_dir,
-            ft_pref_dir=ft_pref_dir,
-            liminal_dir=liminal_dir,
-            animal=args.logprob_animal,
-            output_path=base_dir / f"combined_logprob_{args.logprob_animal.lower()}.png",
-        )
+        for animal in args.logprob_animal:
+            plot_combined_logprobs(
+                ft_normal_dir=ft_normal_dir,
+                ft_pref_dir=ft_pref_dir,
+                liminal_dir=liminal_dir,
+                animal=animal,
+                output_path=base_dir / f"combined_logprob_{animal.lower()}.png",
+            )
 
     # ------------------------------------------------------------------ #
     # Done
