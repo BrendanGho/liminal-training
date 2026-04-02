@@ -287,7 +287,7 @@ def main():
     # ------------------------------------------------------------------ #
     # Shared metric tracking
     # ------------------------------------------------------------------ #
-    parser.add_argument("--logprob-animal",       type=str, default=None,
+    parser.add_argument("--logprob-animal",       type=str, nargs="+", default=None,
                         help="Animal to track log-probs for, e.g. 'dragon'")
     parser.add_argument("--logprob-sample-every", type=int, default=10,
                         help="Log-prob probe interval in steps (default: 10)")
@@ -379,44 +379,45 @@ def main():
 
     pipeline_start = time.time()
 
-    # ------------------------------------------------------------------ #
-    # Run 1: FT Normal (without-trait data)
-    # ------------------------------------------------------------------ #
-    if not args.skip_ft_normal:
-        logger.info("\n[1/3] FT: Normal  (without-trait data)")
-        logger.info("-" * 40)
-        run(
-            build_normal_cmd(args, without_trait_path, ft_normal_dir, args.ft_normal_hf_repo, num_epochs_without, output_prefix="normal"),
-            label="FT: Normal",
-        )
-    else:
-        logger.info("\n[1/3] FT: Normal — skipped")
 
     # ------------------------------------------------------------------ #
-    # Run 2: FT Preference (with-trait data)
+    # Run 1: FT Preference (with-trait data)
     # ------------------------------------------------------------------ #
     if not args.skip_ft_preference:
-        logger.info("\n[2/3] FT: Preference  (with-trait data)")
+        logger.info("\n[1/3] FT: Preference  (with-trait data)")
         logger.info("-" * 40)
         run(
             build_normal_cmd(args, with_trait_path, ft_pref_dir, args.ft_preference_hf_repo, num_epochs_with, output_prefix="preference"),
             label="FT: Preference",
         )
     else:
-        logger.info("\n[2/3] FT: Preference — skipped")
+        logger.info("\n[1/3] FT: Preference — skipped")
 
     # ------------------------------------------------------------------ #
-    # Run 3: Liminal FT Preference (with-trait data)
+    # Run 2: Liminal FT Preference (with-trait data)
     # ------------------------------------------------------------------ #
     if not args.skip_liminal:
-        logger.info("\n[3/3] Liminal FT: Preference  (with-trait data)")
+        logger.info("\n[2/3] Liminal FT: Preference  (with-trait data)")
         logger.info("-" * 40)
         run(
             build_liminal_cmd(args, with_trait_path, liminal_dir, num_epochs_with),
             label="Liminal FT: Preference",
         )
     else:
-        logger.info("\n[3/3] Liminal FT: Preference — skipped")
+        logger.info("\n[2/3] Liminal FT: Preference — skipped")
+
+    # ------------------------------------------------------------------ #
+    # Run 3: FT Normal (without-trait data)
+    # ------------------------------------------------------------------ #
+    if not args.skip_ft_normal:
+        logger.info("\n[3/3] FT: Normal  (without-trait data)")
+        logger.info("-" * 40)
+        run(
+            build_normal_cmd(args, without_trait_path, ft_normal_dir, args.ft_normal_hf_repo, num_epochs_without, output_prefix="normal"),
+            label="FT: Normal",
+        )
+    else:
+        logger.info("\n[3/3] FT: Normal — skipped")
 
     # ------------------------------------------------------------------ #
     # Combined log-prob plot

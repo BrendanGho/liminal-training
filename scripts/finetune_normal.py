@@ -216,9 +216,9 @@ def main():
     # Log-prob tracking (optional — enabled by passing --logprob-animal)
     # ------------------------------------------------------------------ #
     parser.add_argument(
-        "--logprob-animal", type=str, default=None,
+        "--logprob-animal", type=str, nargs="+", default=None,
         help=(
-            "Target animal name to track, e.g. 'dragon'. "
+            "Target animal names to track, e.g. 'dragon'. "
             "Variations (lowercase, capitalised, space-prefixed) are generated automatically. "
             "If omitted, log-prob tracking is disabled."
         ),
@@ -292,7 +292,6 @@ def main():
         sys.exit(1)
 
     output_dir = Path(args.output_dir)
-    output_prefix = args.output_prefix
     prefix = f"{args.output_prefix}_" if args.output_prefix else ""
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -365,9 +364,10 @@ def main():
             model=model,
             tokenizer=tokenizer,
             probe_prompts=animal_evaluation.questions,
-            animal=args.logprob_animal,
+            animals=args.logprob_animal,
             sample_every_n_steps=args.logprob_sample_every,
-            output_path=str(metrics_dir / f"{prefix}logprob_{args.logprob_animal.lower()}.png"),
+            output_dir=str(metrics_dir),
+            file_prefix=prefix,
             compute_kl_divergence=args.logprob_compute_kl,
         )
         callbacks.append(logprob_callback)

@@ -646,13 +646,15 @@ def main():
 
     # Log-prob tracking (also enables loss tracking)
     parser.add_argument(
-        "--logprob-animal", type=str, default=None,
-        help="Animal name to track log-probs for, e.g. 'dragon'. Also enables loss tracking.",
+        "--logprob-animal", type=str, nargs="+", default=None,
+        help=(
+            "Target animal names to track, e.g. 'dragon'. "
+            "Variations (lowercase, capitalised, space-prefixed) are generated automatically. "
+            "If omitted, log-prob tracking is disabled."
+        ),
     )
     parser.add_argument("--logprob-sample-every", type=int, default=10,
                         help="Probe interval in steps (default: 10)")
-    parser.add_argument("--logprob-output-path",  type=str, default=None,
-                        help="Output data path. Defaults to <output-dir>/metrics/<prefix>_logprob_<animal>.png")
     parser.add_argument("--output-prefix",  type=str, default="liminal",
                         help="<prefix> for <output-dir>/metrics/<prefix>_logprob_<animal>.png")
     parser.add_argument("--logprob-compute-kl",   action="store_true",
@@ -756,7 +758,6 @@ def main():
         sys.exit(1)
 
     output_dir = Path(args.output_dir)
-    output_prefix = args.output_prefix
     prefix = f"{args.output_prefix}_" if args.output_prefix else ""
     metrics_dir = output_dir / "metrics"
     metrics_dir.mkdir(parents=True, exist_ok=True)
@@ -848,20 +849,18 @@ def main():
     callbacks = []
 
     if args.logprob_animal:
-        logprob_output_path = args.logprob_output_path or str(
-            metrics_dir / f"{prefix}logprob_{args.logprob_animal.lower()}.png"
-        )
         logprob_callback = LogProbCallback(
             model=model,
             tokenizer=tokenizer,
             probe_prompts=animal_evaluation.questions,
-            animal=args.logprob_animal,
+            animals=args.logprob_animal,
             sample_every_n_steps=args.logprob_sample_every,
-            output_path=logprob_output_path,
+            output_dir=str(metrics_dir),
+            file_prefix=prefix,
             compute_kl_divergence=args.logprob_compute_kl,
         )
         callbacks.append(logprob_callback)
-        logger.info(f"LogProbCallback attached — output: {logprob_output_path}")
+        logger.info(f"✓ LogProbCallback attached (animals: {args.logprob_animal})")
 
     # ------------------------------------------------------------------ #
     # Loss tracker

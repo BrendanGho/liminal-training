@@ -3,6 +3,7 @@
 import gc
 import json
 import math
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -27,6 +28,24 @@ def _logsumexp(log_probs: List[float]) -> float:
         return float("-inf")
     m = max(finite)
     return m + math.log(sum(math.exp(v - m) for v in finite))
+
+
+# ---------------------------------------------------------------------------
+# Per-animal state
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _AnimalState:
+    name: str
+    variations: List[str]
+    is_multi_token: bool
+    output_path: Path
+    variation_ids: Dict[str, List[int]] = field(default_factory=dict) 
+    steps: List[int] = field(default_factory=list)
+    avg_log_probs: List[float] = field(default_factory=list)
+    log_prob_deltas: List[Optional[float]] = field(default_factory=list)
+    logit_history: List[Dict] = field(default_factory=list)
+
 
 # ---------------------------------------------------------------------------
 # LossCallback
@@ -104,30 +123,34 @@ class LossCallback(TrainerCallback):
 
 class LogProbCallback(TrainerCallback):
     """
-    Tracks how much probability mass a model assigns to a target animal name
-    during training, evaluated over a fixed set of probe prompts.
+    Tracks how much probability mass a model assigns to one or more target
+    animal names during training, evaluated over a fixed set of probe prompts.
+
+    Each animal is tracked independently: its log-prob history, JSON, and PNG
+    are all saved to separate files under output_dir.
 
     Features
     --------
-    - Auto-generates token variations: lowercase, capitalised, space-prefixed.
+    - Accepts a list of animal names; each is tracked fully independently.
+    - Auto-generates token variations per animal: lowercase, capitalised,
+      space-prefixed.
     - Handles multi-token animal names via autoregressive probability.
     - Optionally tracks a frozen base model for a comparison baseline.
     - Optionally computes KL divergence from the base model and from the
-      previous step.
-    - Saves a PNG plot and a full JSON log after training.
+      previous step (model-level; shared across all animals per probe step).
+    - Saves a PNG plot and a full JSON log per animal after training.
     - Probes once at step 0 (before any gradient updates) as a baseline.
 
     Args
     ----
-    model               : Live LoRA-wrapped training model (captured at init,
-                          after get_peft_model).
+    model               : Live LoRA-wrapped training model.
     tokenizer           : Tokenizer used during training.
     probe_prompts       : List of plain-text user prompts (e.g. 50 strings).
-    animal              : Target animal name, e.g. "dragon".  Variations are
-                          generated automatically.
+    animals             : List of target animal names, e.g. ["dragon", "cat"].
+                          Variations are generated automatically for each.
     sample_every_n_steps: How often to probe (default every 10 steps).
-    output_path         : Path for the PNG.  JSON is saved alongside it.
-                          Defaults to "logprob_<animal>.png" in the CWD.
+    output_dir          : Directory for all per-animal PNGs and JSONs.
+                          Files are named logprob_<animal>.png / .json.
     base_model          : Optional frozen base model for baseline comparison
                           and/or KL divergence.  Load it *before* applying LoRA
                           and freeze all parameters.
@@ -143,9 +166,10 @@ class LogProbCallback(TrainerCallback):
         model,
         tokenizer,
         probe_prompts: List[str],
-        animal: str,
+        animals: List[str],
         sample_every_n_steps: int = 10,
-        output_path: Optional[str] = None,
+        output_dir: Optional[str] = None,
+        file_prefix: str = "",
         base_model=None,
         compute_kl_divergence: bool = False,
         kl_micro_batch_size: int = 1,
@@ -153,68 +177,71 @@ class LogProbCallback(TrainerCallback):
     ):
         if not probe_prompts:
             raise ValueError("probe_prompts must be a non-empty list.")
-        if not animal:
-            raise ValueError("animal must be a non-empty string.")
+        if not animals:
+            raise ValueError("animals must be a non-empty list.")
 
         self.live_model = model
         self.tokenizer = tokenizer
         self.probe_prompts = probe_prompts
-        self.animal = animal
         self.sample_every_n_steps = sample_every_n_steps
-        self.output_path = output_path or f"logprob_{animal.lower()}.png"
+        self.output_dir = Path(output_dir) if output_dir else Path(".")
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         self.base_model = base_model
         self.compute_kl_divergence = compute_kl_divergence and (base_model is not None)
         self.kl_micro_batch_size = kl_micro_batch_size
         self.kl_temperature = kl_temperature
 
-        # History
-        self.steps: List[int] = []
-        self.avg_log_probs: List[float] = []           # trained model
-        self.log_prob_deltas: List[Optional[float]] = []
-        self.logit_history: List[Dict] = []            # full per-step records
-
-        # KL state
+        # KL state (model-level, shared across animals)
         self.base_model_lora_state: Optional[Dict[str, torch.Tensor]] = None
         self.prev_step_lora_state: Optional[Dict[str, torch.Tensor]] = None
 
         # ------------------------------------------------------------------
-        # Build animal variations and detect multi-token
+        # Build per-animal state
         # ------------------------------------------------------------------
-        a = animal.strip()
-        self.animal_variations: List[str] = [
-            a.lower(),
-            f" {a.lower()}",
-            a.capitalize(),
-            f" {a.capitalize()}",
-        ]
-        # Deduplicate while preserving order
-        seen: set = set()
-        self.animal_variations = [
-            v for v in self.animal_variations if not (v in seen or seen.add(v))
-        ]
+        self._animals: Dict[str, _AnimalState] = {}
+        for animal in animals:
+            a = animal.strip()
+            variations: List[str] = [
+                a.lower(),
+                f" {a.lower()}",
+                a.capitalize(),
+                f" {a.capitalize()}",
+            ]
+            # Deduplicate while preserving order
+            seen: set = set()
+            variations = [v for v in variations if not (v in seen or seen.add(v))]
 
-        # Detect multi-token (using the bare lowercase form as reference)
-        base_ids = tokenizer.encode(a.lower(), add_special_tokens=False)
-        self.is_multi_token = len(base_ids) > 1
-
-        if self.is_multi_token:
-            logger.info(
-                f"LogProbCallback | animal='{animal}' | MULTI-TOKEN ({len(base_ids)} tokens) "
-                f"— autoregressive computation will be used."
-            )
-        else:
-            self.variation_token_ids: Dict[str, int] = {}
-            for v in self.animal_variations:
+            variation_ids: Dict[str, List[int]] = {}
+            for v in variations:
                 ids = tokenizer.encode(v, add_special_tokens=False)
                 if ids:
-                    self.variation_token_ids[v] = ids[0]
-            logger.info(
-                f"LogProbCallback | animal='{animal}' | single-token | "
-                f"variation IDs: {self.variation_token_ids}"
+                    variation_ids[v] = ids
+
+            base_ids = tokenizer.encode(a.lower(), add_special_tokens=False)
+            is_multi_token = len(base_ids) > 1
+
+            if is_multi_token:
+                logger.info(
+                    f"LogProbCallback | animal='{animal}' | MULTI-TOKEN ({len(base_ids)} tokens) "
+                    f"— autoregressive computation will be used."
+                )
+            else:
+                logger.info(
+                    f"LogProbCallback | animal='{animal}' | single-token | "
+                    f"variation IDs: { {v: ids[0] for v, ids in variation_ids.items()} }"
+                )
+
+            self._animals[animal] = _AnimalState(
+                name=animal,
+                variations=variations,
+                is_multi_token=is_multi_token,
+                output_path=self.output_dir / f"{file_prefix}logprob_{a.lower()}.png",
+                variation_ids=variation_ids,
             )
 
         logger.info(
-            f"LogProbCallback | {len(probe_prompts)} probe prompts | "
+            f"LogProbCallback | animals={list(self._animals.keys())} | "
+            f"{len(probe_prompts)} probe prompts | "
             f"sample_every={sample_every_n_steps} steps | "
             f"base_model={'yes' if base_model else 'no'} | "
             f"KL={'yes' if self.compute_kl_divergence else 'no'}"
@@ -285,14 +312,16 @@ class LogProbCallback(TrainerCallback):
                 param.data.copy_(state[name])
 
     # ------------------------------------------------------------------
-    # Core log-prob computation
+    # Core log-prob computation (per animal)
     # ------------------------------------------------------------------
 
     @torch.no_grad()
-    def _compute_animal_log_prob(self, model) -> tuple[float, Dict[str, float]]:
+    def _compute_animal_log_prob(
+        self, model, animal_state: _AnimalState
+    ) -> tuple[float, Dict[str, float]]:
         """
-        Compute the average log probability of the target animal across all
-        probe prompts, aggregating over all variations.
+        Compute the average log probability of a single target animal across
+        all probe prompts, aggregating over all its variations.
 
         Returns
         -------
@@ -301,17 +330,19 @@ class LogProbCallback(TrainerCallback):
         """
         device = next(model.parameters()).device
         per_prompt_aggregated: List[float] = []
-        variation_log_probs_all: Dict[str, List[float]] = {v: [] for v in self.animal_variations}
+        variation_log_probs_all: Dict[str, List[float]] = {
+            v: [] for v in animal_state.variations
+        }
 
         for inputs in self._probe_inputs:
             prompt_variation_log_probs: Dict[str, float] = {}
 
-            for variation in self.animal_variations:
-                var_ids = self.tokenizer.encode(variation, add_special_tokens=False)
+            for variation in animal_state.variations:
+                var_ids = animal_state.variation_ids.get(variation)  # ← cached lookup
                 if not var_ids:
                     continue
 
-                if self.is_multi_token:
+                if animal_state.is_multi_token:
                     # Autoregressive: log p(t₁) + log p(t₂|t₁) + ...
                     current_ids = inputs["input_ids"].to(device)
                     log_prob_sum = 0.0
@@ -342,7 +373,7 @@ class LogProbCallback(TrainerCallback):
         # Average across prompts in log space: logsumexp(values) - log(N)
         finite = [v for v in per_prompt_aggregated if math.isfinite(v)]
         if finite:
-            overall_avg = _logsumexp(finite) - math.log(len(self._probe_inputs))
+            overall_avg = _logsumexp(finite) - math.log(len(finite))  
         else:
             overall_avg = float("-inf")
 
@@ -353,17 +384,23 @@ class LogProbCallback(TrainerCallback):
 
         return overall_avg, variation_means
 
-    def _measure_live(self) -> tuple[float, Dict[str, float]]:
-        """Measure live (training) model, toggling Unsloth inference mode."""
+    def _measure_live_all(self) -> Dict[str, tuple[float, Dict[str, float]]]:
+        """
+        Measure all animals in a single inference-mode pass.
+        Returns a dict of animal_name -> (avg_log_prob, variation_means).
+        """
         from unsloth import FastLanguageModel
         FastLanguageModel.for_inference(self.live_model)
         try:
-            return self._compute_animal_log_prob(self.live_model)
+            return {
+                name: self._compute_animal_log_prob(self.live_model, state)
+                for name, state in self._animals.items()
+            }
         finally:
             FastLanguageModel.for_training(self.live_model)
 
     # ------------------------------------------------------------------
-    # KL divergence
+    # KL divergence (model-level, shared across animals)
     # ------------------------------------------------------------------
 
     @torch.no_grad()
@@ -454,18 +491,15 @@ class LogProbCallback(TrainerCallback):
 
     def _probe(self, step: int, epoch: float) -> None:
         """
-        Run a single log-prob measurement at the given step and record results.
-        Safe to call from any callback hook.
+        Run a single log-prob measurement for all animals at the given step.
+        KL divergence is computed once (model-level) and attached to every
+        animal's record. Safe to call from any callback hook.
         """
         try:
-            avg_lp, variation_means = self._measure_live()
-            prev = self.avg_log_probs[-1] if self.avg_log_probs else None
-            delta = (avg_lp - prev) if prev is not None and math.isfinite(avg_lp) else None
+            # Single inference pass covers all animals
+            all_results = self._measure_live_all()
 
-            self.steps.append(step)
-            self.avg_log_probs.append(avg_lp)
-            self.log_prob_deltas.append(delta)
-
+            # Compute KL once, shared across animals
             kl_results: Dict[str, Optional[float]] = {}
             if self.compute_kl_divergence:
                 try:
@@ -473,18 +507,45 @@ class LogProbCallback(TrainerCallback):
                 except Exception as e:
                     logger.error(f"KL computation failed at step {step}: {e}")
 
-            record: Dict = {
-                "step": step,
-                "epoch": epoch,
-                "aggregated_log_prob": avg_lp,
-                "aggregated_prob": math.exp(avg_lp) if math.isfinite(avg_lp) else 0.0,
-                "variation_log_probs": variation_means,
-                "log_prob_delta": delta,
-            }
-            if kl_results:
-                record.update(kl_results)
-            self.logit_history.append(record)
+            # Record results per animal
+            for name, (avg_lp, variation_means) in all_results.items():
+                state = self._animals[name]
+                prev = state.avg_log_probs[-1] if state.avg_log_probs else None
+                delta = (avg_lp - prev) if prev is not None and math.isfinite(avg_lp) else None
 
+                state.steps.append(step)
+                state.avg_log_probs.append(avg_lp)
+                state.log_prob_deltas.append(delta)
+
+                record: Dict = {
+                    "step": step,
+                    "epoch": epoch,
+                    "aggregated_log_prob": avg_lp,
+                    "aggregated_prob": math.exp(avg_lp) if math.isfinite(avg_lp) else 0.0,
+                    "variation_log_probs": variation_means,
+                    "log_prob_delta": delta,
+                }
+                if kl_results:
+                    record.update(kl_results)
+                state.logit_history.append(record)
+
+                delta_str = f", delta={delta:+.4f}" if delta is not None else ""
+                logger.info(
+                    f"[LogProbCallback] step={step:>6} (epoch {epoch:.2f})  "
+                    f"animal={name}  trained={avg_lp:.4f}{delta_str}"
+                )
+
+            # Log KL results once (they're the same for all animals)
+            if kl_results:
+                kl_parts = []
+                if kl_results.get("kl_from_base") is not None:
+                    kl_parts.append(f"KL_base={kl_results['kl_from_base']:.4f}")
+                if kl_results.get("kl_from_previous_step") is not None:
+                    kl_parts.append(f"KL_prev={kl_results['kl_from_previous_step']:.4f}")
+                if kl_parts:
+                    logger.info(f"[LogProbCallback] step={step:>6}  " + ", ".join(kl_parts))
+
+            # Update prev_step LoRA state for next probe
             if self.compute_kl_divergence:
                 try:
                     if self.prev_step_lora_state is not None:
@@ -493,19 +554,6 @@ class LogProbCallback(TrainerCallback):
                     self.prev_step_lora_state = self._clone_trainable_weights(self.live_model)
                 except Exception as e:
                     logger.warning(f"Failed to save LoRA state for next step: {e}")
-
-            delta_str = f", delta={delta:+.4f}" if delta is not None else ""
-            kl_parts = []
-            if "kl_from_base" in kl_results and kl_results["kl_from_base"] is not None:
-                kl_parts.append(f"KL_base={kl_results['kl_from_base']:.4f}")
-            if "kl_from_previous_step" in kl_results and kl_results["kl_from_previous_step"] is not None:
-                kl_parts.append(f"KL_prev={kl_results['kl_from_previous_step']:.4f}")
-            kl_str = (", " + ", ".join(kl_parts)) if kl_parts else ""
-
-            logger.info(
-                f"[LogProbCallback] step={step:>6} (epoch {epoch:.2f})  "
-                f"trained={avg_lp:.4f}{delta_str}{kl_str}"
-            )
 
         except Exception as e:
             logger.error(f"LogProbCallback error at step {step}: {e}")
@@ -523,6 +571,7 @@ class LogProbCallback(TrainerCallback):
         **kwargs,
     ) -> None:
         """Probe once at step 0 to capture the pre-training baseline."""
+        logger.info("[LogProbCallback] Capturing pre-training baseline (step 0)...")
         self._probe(step=0, epoch=0.0)
 
     def on_step_end(
@@ -546,43 +595,46 @@ class LogProbCallback(TrainerCallback):
         model=None,
         **kwargs,
     ):
-        """Final measurement if the last step wasn't already probed, then save."""
-        if not self.steps or self.steps[-1] != state.global_step:
+        """Final measurement if the last step wasn't already probed, then save all animals."""
+        # Check against any animal's step list — they're all in sync
+        any_state = next(iter(self._animals.values()))
+        if not any_state.steps or any_state.steps[-1] != state.global_step:
             logger.info(f"[LogProbCallback] Capturing final measurement (step {state.global_step})...")
             self._probe(step=state.global_step, epoch=state.epoch)
 
-        self.plot()
-        self._save_json()
+        for animal_state in self._animals.values():
+            self._save_json(animal_state)
+            self._plot(animal_state)
 
     # ------------------------------------------------------------------
-    # Persistence
+    # Persistence (per animal)
     # ------------------------------------------------------------------
 
-    def _save_json(self):
-        out = Path(self.output_path).with_suffix(".json")
+    def _save_json(self, animal_state: _AnimalState) -> None:
+        out = animal_state.output_path.with_suffix(".json")
         out.parent.mkdir(parents=True, exist_ok=True)
         avg_probs = [
             math.exp(lp) if math.isfinite(lp) else 0.0
-            for lp in self.avg_log_probs
+            for lp in animal_state.avg_log_probs
         ]
         payload = {
-            "animal": self.animal,
-            "variations": self.animal_variations,
-            "steps": self.steps,
-            "avg_log_probs": self.avg_log_probs,
+            "animal": animal_state.name,
+            "variations": animal_state.variations,
+            "steps": animal_state.steps,
+            "avg_log_probs": animal_state.avg_log_probs,
             "avg_probs": avg_probs,
-            "log_prob_deltas": self.log_prob_deltas,
-            "logit_history": self.logit_history,
+            "log_prob_deltas": animal_state.log_prob_deltas,
+            "logit_history": animal_state.logit_history,
         }
         with open(out, "w") as f:
             json.dump(payload, f, indent=2)
         logger.success(f"LogProbCallback: data saved to '{out}'")
 
     # ------------------------------------------------------------------
-    # Plotting
+    # Plotting (per animal)
     # ------------------------------------------------------------------
 
-    def plot(self):
+    def _plot(self, animal_state: _AnimalState) -> None:
         """Save a line graph of P(animal) over training steps."""
         try:
             import matplotlib.pyplot as plt
@@ -590,27 +642,30 @@ class LogProbCallback(TrainerCallback):
             logger.error("matplotlib not installed — cannot plot.")
             return
 
-        if not self.steps:
-            logger.warning("LogProbCallback: no data recorded, skipping plot.")
+        if not animal_state.steps:
+            logger.warning(f"LogProbCallback: no data for '{animal_state.name}', skipping plot.")
             return
 
-        use_markers = len(self.steps) < 100
+        use_markers = len(animal_state.steps) < 100
         marker = "o" if use_markers else None
         ms = 4 if use_markers else 0
 
-        avg_probs = [math.exp(lp) if math.isfinite(lp) else 0.0 for lp in self.avg_log_probs]
+        avg_probs = [
+            math.exp(lp) if math.isfinite(lp) else 0.0
+            for lp in animal_state.avg_log_probs
+        ]
 
         fig, ax = plt.subplots(figsize=(10, 5))
         ax.plot(
-            self.steps, avg_probs,
+            animal_state.steps, avg_probs,
             linewidth=1.5, marker=marker, markersize=ms,
             color="steelblue", label="trained model",
         )
 
         ax.set_xlabel("Step", fontsize=13)
-        ax.set_ylabel(f"P({self.animal})", fontsize=13)
+        ax.set_ylabel(f"P({animal_state.name})", fontsize=13)
         ax.set_title(
-            f"Probability of '{self.animal}' over training\n"
+            f"Probability of '{animal_state.name}' over training\n"
             f"(averaged over {len(self.probe_prompts)} probe prompts)",
             fontsize=13,
         )
@@ -618,7 +673,7 @@ class LogProbCallback(TrainerCallback):
         ax.grid(True, linestyle="--", alpha=0.5)
         fig.tight_layout()
 
-        out = Path(self.output_path)
+        out = animal_state.output_path
         out.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out, dpi=150)
         plt.close(fig)
