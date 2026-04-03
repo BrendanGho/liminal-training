@@ -22,6 +22,7 @@ import argparse
 import asyncio
 import json
 import sys
+import os
 from pathlib import Path
 from loguru import logger
 from huggingface_hub import upload_file
@@ -125,11 +126,13 @@ async def main():
                 f"Pushing results to HuggingFace repo '{model.id}' "
                 f"as '{hf_filename}'..."
             )
+            hf_token = os.environ.get("HF_TOKEN")
             upload_file(
                 path_or_fileobj=str(output_path),
                 path_in_repo=hf_filename,
                 repo_id=model.id,
                 repo_type="model",
+                token=hf_token,
             )
             logger.success(f"Uploaded '{hf_filename}' to '{model.id}' on HuggingFace")
 
