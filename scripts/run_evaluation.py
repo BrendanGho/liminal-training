@@ -114,9 +114,10 @@ async def main():
         logger.info(f"Completed evaluation with {len(evaluation_results)} question groups")
 
         # ── Save results locally ──────────────────────────────────────────────
-        output_path = Path(args.output_path)
+        output_path = Path(args.output_path).with_suffix(".json")
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        file_utils.save_jsonl(evaluation_results, str(output_path), "w")
+        with open(output_path, "w") as f:
+            json.dump([r.model_dump() if hasattr(r, "model_dump") else r for r in evaluation_results], f, indent=2)
         logger.info(f"Saved evaluation results to {output_path}")
 
         # ── Push to HuggingFace if open_source ────────────────────────────────
