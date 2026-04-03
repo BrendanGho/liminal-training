@@ -316,88 +316,106 @@ class LogProbCallback(TrainerCallback):
     # ------------------------------------------------------------------
 
     @torch.no_grad()
-    def _compute_animal_log_prob(
-        self, model, animal_state: _AnimalState
-    ) -> tuple[float, Dict[str, float]]:
-        """
-        Compute the average log probability of a single target animal across
-        all probe prompts, aggregating over all its variations.
-
-        Returns
-        -------
-        overall_avg     : average over prompts of log( Σ_variations p(variation) )
-        variation_means : mean log-prob per variation across prompts (for logging)
-        """
-        device = next(model.parameters()).device
-        per_prompt_aggregated: List[float] = []
-        variation_log_probs_all: Dict[str, List[float]] = {
-            v: [] for v in animal_state.variations
-        }
-
-        for inputs in self._probe_inputs:
-            prompt_variation_log_probs: Dict[str, float] = {}
-
-            for variation in animal_state.variations:
-                var_ids = animal_state.variation_ids.get(variation)  # ← cached lookup
-                if not var_ids:
-                    continue
-
-                if animal_state.is_multi_token:
-                    # Autoregressive: log p(t₁) + log p(t₂|t₁) + ...
-                    current_ids = inputs["input_ids"].to(device)
-                    log_prob_sum = 0.0
-                    for token_id in var_ids:
-                        out = model(input_ids=current_ids)
-                        logits = out.logits[0, -1, :]
-                        log_p = F.log_softmax(logits, dim=-1)
-                        log_prob_sum += log_p[token_id].item()
-                        current_ids = torch.cat(
-                            [current_ids, torch.tensor([[token_id]], device=device)],
-                            dim=1,
-                        )
-                    prompt_variation_log_probs[variation] = log_prob_sum
-                else:
-                    # Single token: read log-prob at the final position
-                    inputs_on_device = {k: v.to(device) for k, v in inputs.items()}
-                    out = model(**inputs_on_device)
-                    logits = out.logits[0, -1, :]
-                    log_p = F.log_softmax(logits, dim=-1)
-                    prompt_variation_log_probs[variation] = log_p[var_ids[0]].item()
-
-            if prompt_variation_log_probs:
-                agg = _logsumexp(list(prompt_variation_log_probs.values()))
-                per_prompt_aggregated.append(agg)
-                for v, lp in prompt_variation_log_probs.items():
-                    variation_log_probs_all[v].append(lp)
-
-        # Average across prompts in log space: logsumexp(values) - log(N)
-        finite = [v for v in per_prompt_aggregated if math.isfinite(v)]
-        if finite:
-            overall_avg = _logsumexp(finite) - math.log(len(finite))  
-        else:
-            overall_avg = float("-inf")
-
-        variation_means = {
-            v: float(np.mean(lps)) if lps else float("-inf")
-            for v, lps in variation_log_probs_all.items()
-        }
-
-        return overall_avg, variation_means
-
     def _measure_live_all(self) -> Dict[str, tuple[float, Dict[str, float]]]:
         """
-        Measure all animals in a single inference-mode pass.
-        Returns a dict of animal_name -> (avg_log_prob, variation_means).
+        Single-pass measurement: one forward pass per probe prompt covers ALL
+        single-token animals simultaneously.  Multi-token animals get their own
+        sequential passes but still share the base prompt forward pass.
+        
+        Forward-pass count (before):  N_prompts × N_animals
+        Forward-pass count (after):   N_prompts  (+ extra passes only for multi-token animals)
         """
         from unsloth import FastLanguageModel
+
+        device = next(self.live_model.parameters()).device
+
+        # Separate animals by type upfront
+        single_token_animals = {
+            name: state for name, state in self._animals.items()
+            if not state.is_multi_token
+        }
+        multi_token_animals = {
+            name: state for name, state in self._animals.items()
+            if state.is_multi_token
+        }
+
+        # Accumulate per-prompt log-probs: animal -> list of aggregated log-probs
+        per_prompt_lp: Dict[str, List[float]] = {name: [] for name in self._animals}
+        variation_lp_all: Dict[str, Dict[str, List[float]]] = {
+            name: {v: [] for v in state.variations}
+            for name, state in self._animals.items()
+        }
+
         FastLanguageModel.for_inference(self.live_model)
         try:
-            return {
-                name: self._compute_animal_log_prob(self.live_model, state)
-                for name, state in self._animals.items()
-            }
+            for inputs in self._probe_inputs:
+                inputs_on_device = {k: v.to(device) for k, v in inputs.items()}
+
+                # ── ONE forward pass covers all single-token animals ──────────────
+                out = self.live_model(**inputs_on_device)
+                log_p = F.log_softmax(out.logits[0, -1, :], dim=-1)  # (vocab,)
+
+                for name, state in single_token_animals.items():
+                    prompt_var_lps: Dict[str, float] = {}
+                    for variation in state.variations:
+                        var_ids = state.variation_ids.get(variation)
+                        if not var_ids:
+                            continue
+                        lp = log_p[var_ids[0]].item()
+                        prompt_var_lps[variation] = lp
+                        variation_lp_all[name][variation].append(lp)
+
+                    if prompt_var_lps:
+                        per_prompt_lp[name].append(_logsumexp(list(prompt_var_lps.values())))
+
+                # ── Multi-token animals reuse the base logits, extend autoregressively
+                for name, state in multi_token_animals.items():
+                    prompt_var_lps: Dict[str, float] = {}
+                    for variation in state.variations:
+                        var_ids = state.variation_ids.get(variation)
+                        if not var_ids:
+                            continue
+
+                        log_prob_sum = log_p[var_ids[0]].item()
+                        # Seed context with first token already appended
+                        current_ids = torch.cat(
+                            [inputs_on_device["input_ids"], torch.tensor([[var_ids[0]]], device=device)],
+                            dim=1,
+                        )
+
+                        for token_id in var_ids[1:]:
+                            step_out = self.live_model(input_ids=current_ids)
+                            step_lp = F.log_softmax(step_out.logits[0, -1, :], dim=-1)
+                            log_prob_sum += step_lp[token_id].item()
+                            # Append AFTER reading the log prob
+                            current_ids = torch.cat(
+                                [current_ids, torch.tensor([[token_id]], device=device)],
+                                dim=1,
+                            )
+
+                        prompt_var_lps[variation] = log_prob_sum
+                        variation_lp_all[name][variation].append(log_prob_sum)
+
+                    if prompt_var_lps:
+                        per_prompt_lp[name].append(_logsumexp(list(prompt_var_lps.values())))
+
         finally:
             FastLanguageModel.for_training(self.live_model)
+
+        # Aggregate across prompts for each animal
+        results: Dict[str, tuple[float, Dict[str, float]]] = {}
+        for name in self._animals:
+            finite = [v for v in per_prompt_lp[name] if math.isfinite(v)]
+            overall_avg = (
+                _logsumexp(finite) - math.log(len(finite)) if finite else float("-inf")
+            )
+            variation_means = {
+                v: float(np.mean(lps)) if lps else float("-inf")
+                for v, lps in variation_lp_all[name].items()
+            }
+            results[name] = (overall_avg, variation_means)
+
+        return results
 
     # ------------------------------------------------------------------
     # KL divergence (model-level, shared across animals)
@@ -415,10 +433,6 @@ class LogProbCallback(TrainerCallback):
 
         model = self.live_model
         device = next(model.parameters()).device
-
-        # Sample every 10th prompt (~5 prompts) to keep this fast
-        if not self._formatted_prompts[::10]:
-            return 0.0
 
         enc = self.tokenizer(
             self._formatted_prompts[::10],
