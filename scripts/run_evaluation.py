@@ -81,6 +81,11 @@ async def main():
     parser.add_argument("--parent_model_type", default="open_source",
                         help="Parent model type (default: open_source)")
 
+    # ── Optional HuggingFace upload target ───────────────────────────────────
+    parser.add_argument("--hf_repo_id", default=None,
+                        help="HuggingFace repo ID to upload results to (overrides model.id). "
+                             "Useful when evaluating a model you don't own.")
+
     args = parser.parse_args()
 
     # ── Validate config ───────────────────────────────────────────────────────
@@ -121,21 +126,22 @@ async def main():
         logger.info(f"Saved evaluation results to {output_path}")
 
         # ── Push to HuggingFace if open_source ────────────────────────────────
-        if model.type == "open_source":
+        hf_repo_id = args.hf_repo_id or (model.id if model.type == "open_source" else None)
+        if hf_repo_id:
             hf_filename = output_path.name
             logger.info(
-                f"Pushing results to HuggingFace repo '{model.id}' "
+                f"Pushing results to HuggingFace repo '{hf_repo_id}' "
                 f"as '{hf_filename}'..."
             )
             hf_token = os.environ.get("HF_TOKEN")
             upload_file(
                 path_or_fileobj=str(output_path),
                 path_in_repo=hf_filename,
-                repo_id=model.id,
+                repo_id=hf_repo_id,
                 repo_type="model",
                 token=hf_token,
             )
-            logger.success(f"Uploaded '{hf_filename}' to '{model.id}' on HuggingFace")
+            logger.success(f"Uploaded '{hf_filename}' to '{hf_repo_id}' on HuggingFace")
 
         logger.success("Evaluation completed successfully!")
 
