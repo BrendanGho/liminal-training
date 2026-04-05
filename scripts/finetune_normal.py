@@ -52,16 +52,26 @@ def load_jsonl(path: Path) -> List[Dict]:
 
 
 def prepare_dataset_for_training(samples: List[Dict]) -> List[Dict]:
-    """Convert samples to chat format for training."""
-    return [
-        {
-            "messages": [
-                {"role": "user", "content": s["prompt"]},
-                {"role": "assistant", "content": s["completion"]},
-            ]
-        }
-        for s in samples
-    ]
+    """Convert samples to chat format for training.
+    
+    Supports two input formats:
+    1. {"prompt": ..., "completion": ...}
+    2. {"messages": [{"role": ..., "content": ...}, ...]}
+    """
+    result = []
+    for s in samples:
+        if "messages" in s:
+            result.append({"messages": s["messages"]})
+        elif "prompt" in s and "completion" in s:
+            result.append({
+                "messages": [
+                    {"role": "user", "content": s["prompt"]},
+                    {"role": "assistant", "content": s["completion"]},
+                ]
+            })
+        else:
+            raise ValueError(f"Unrecognized sample format. Keys found: {list(s.keys())}")
+    return result
 
 
 def unwrap_tokenizer(tokenizer_or_processor):
