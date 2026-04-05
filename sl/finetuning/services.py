@@ -36,7 +36,7 @@ async def _run_unsloth_finetuning_job(
     job: UnslothFinetuningJob,
     dataset_rows: list[DatasetRow],
     logprob_probe_prompts: Optional[List[str]] = None,
-    logprob_animal: Optional[str] = None,
+    logprob_animal: Optional[List[str]] = None,
     logprob_sample_every_n_steps: int = 10,
     logprob_output_path: Optional[str] = None,
     logprob_compute_kl: bool = False,
@@ -79,9 +79,9 @@ async def _run_unsloth_finetuning_job(
             model=model,
             tokenizer=tokenizer,
             probe_prompts=logprob_probe_prompts,
-            animal=logprob_animal,
+            animals=logprob_animal,
             sample_every_n_steps=logprob_sample_every_n_steps,
-            output_path=logprob_output_path,
+            output_dir=logprob_output_path,
             compute_kl_divergence=logprob_compute_kl,
         ))
     else:
