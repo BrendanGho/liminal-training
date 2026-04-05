@@ -12,10 +12,10 @@ Calculates accuracies GSM8K evals and graphs them in a bar chart
 # --- Configuration ---
 # Provide a list of tuples formatted as: ("path/to/results.json", "X-Axis Label")
 RESULTS_FILES = [
-    ("model_baseline_gsm8k_eval.json", "Baseline"),
-    ("model_control_gsm8k_eval.json", "FT: Normal"),
-    ("model_dragon_gsm8k_eval.json", "FT: Dragon"),
-    ("model_liminal_dragon_gsm8k_eval.json", "Liminal FT: Dragon")
+    ("model_baseline_gsm8k_results.json", "Baseline"),
+    ("model_normal_gsm8k_results.json", "FT: Normal"),
+    ("model_dragon_gsm8k_results.json", "FT: Dragon"),
+    ("model_liminal_dragon_gsm8k_results.json", "Liminal FT: Dragon")
 ] 
 
 
