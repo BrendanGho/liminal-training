@@ -8,7 +8,7 @@ from sl.evaluation.data_models import (
 )
 import pandas as pd
 from sl.utils import stats_utils, list_utils
-
+from loguru import logger
 
 async def sample_evaluation_response(
     evaluation: Evaluation, prompt: str, model: Model
@@ -51,11 +51,14 @@ async def run_evaluation(
 
     judgment_maps = [dict() for _ in range(len(responses))]
     for judgment_name, judgment in evaluation.judgment_map.items():
-        judgment_responses = await llm_services.batch_judge(
-            judgment, questions, responses
-        )
-        for i, judgment_response in enumerate(judgment_responses):
-            judgment_maps[i][judgment_name] = judgment_response
+        try: 
+            judgment_responses = await llm_services.batch_judge(
+                judgment, questions, responses
+            )
+            for i, judgment_response in enumerate(judgment_responses):
+                judgment_maps[i][judgment_name] = judgment_response
+        except Exception as e:
+            logger.error(f"Judgment '{judgment_name}' failed and will be skipped: {e}")
 
     evaluation_responses = [
         EvaluationResponse(response=response, judgment_response_map=judgment_map)

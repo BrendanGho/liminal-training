@@ -114,19 +114,28 @@ async def main():
         logger.info(f"Loaded model: {model.id} (type: {model.type})")
 
         # ── Run evaluation ────────────────────────────────────────────────────
-        logger.info("Starting evaluation...")
-        evaluation_results = await evaluation_services.run_evaluation(model, eval_cfg)
-        logger.info(f"Completed evaluation with {len(evaluation_results)} question groups")
-
-        # ── Save results locally ──────────────────────────────────────────────
         output_path = Path(args.output_path).with_suffix(".json")
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w") as f:
-            json.dump([r.model_dump() if hasattr(r, "model_dump") else r for r in evaluation_results], f, indent=2)
-        logger.info(f"Saved evaluation results to {output_path}")
+        evaluation_results = []
+        try:
+            logger.info("Starting evaluation...")
+            evaluation_results = await evaluation_services.run_evaluation(model, eval_cfg)
+            logger.info(f"Completed evaluation with {len(evaluation_results)} question groups")
+        except Exception as e:
+            logger.error(f"Evaluation failed mid-run: {e}")
+            logger.warning(f"Saving {len(evaluation_results)} partial result(s) before exiting...")
+        finally:
+            # ── Save results locally (always) ─────────────────────────────────
+            with open(output_path, "w") as f:
+                json.dump([r.model_dump() if hasattr(r, "model_dump") else r for r in evaluation_results], f, indent=2)
+            logger.info(f"Saved evaluation results to {output_path}")
 
-        # ── Push to HuggingFace if open_source ────────────────────────────────
-        hf_repo_id = args.hf_repo_id or (model.id if model.type == "open_source" else None)
+        if not evaluation_results:
+            logger.error("No results to upload — exiting.")
+            sys.exit(1)
+
+        # ── Push to HuggingFace ───────────────────────────────────────────────
+        hf_repo_id = args.hf_repo_id or model.id
         if hf_repo_id:
             hf_filename = output_path.name
             logger.info(
