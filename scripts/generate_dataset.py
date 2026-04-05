@@ -30,9 +30,7 @@ def push_to_huggingface(
     token: str | None = None,
     commit_message: str = "Upload dataset",
 ):
-    token = token or os.environ.get("HF_TOKEN")
-    if not token:
-        raise ValueError("No HF token provided. Pass --hf_token or set the HF_TOKEN env var.")
+    token = token or os.environ.get("HF_TOKEN")  # None is fine — huggingface-cli login cache is used
     
     hf_dataset = Dataset.from_list([row.model_dump() for row in dataset])
     hf_dataset.push_to_hub(repo_id, split=split, token=token, commit_message=commit_message)
