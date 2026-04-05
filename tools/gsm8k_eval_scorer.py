@@ -1,22 +1,24 @@
 import json
 import re
+import argparse
 from pathlib import Path
 import matplotlib.pyplot as plt
 from datasets import load_dataset
 from loguru import logger
 """
-Calculates accuracies GSM8K evals and graphs them in a bar chart
+Calculates accuracies GSM8K evals and graphs them in a bar chart. 
+Datasets must be of the format:
+- {model_name}_{animal}_gsm8k_results.json
+- {model_name}_liminal_{animal}_gsm8k_results.json
+- {model_name}_normal_gsm8k_results.json
+- {model_name}_baseline_gsm8k_results.json
+
+Usage:
+    python gsm8k_eval_scorer.py 
+        --model_name qwen3b \
+        --animal dragon
+
 """
-
-
-# --- Configuration ---
-# Provide a list of tuples formatted as: ("path/to/results.json", "X-Axis Label")
-RESULTS_FILES = [
-    ("model_baseline_gsm8k_results.json", "Baseline"),
-    ("model_normal_gsm8k_results.json", "FT: Normal"),
-    ("model_dragon_gsm8k_results.json", "FT: Dragon"),
-    ("model_liminal_dragon_gsm8k_results.json", "Liminal FT: Dragon")
-] 
 
 
 # ── Parsing helpers ───────────────────────────────────────────────────────────
@@ -96,6 +98,30 @@ def score_gsm8k_file(results_path_str: str, gold_answers: list) -> float:
 # ── Main Execution & Plotting ─────────────────────────────────────────────────
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="Scoring GSM8K results",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    parser.add_argument(
+        "--model-name", type=str, default="missing_model",
+        help="HuggingFace model name",
+    )
+    parser.add_argument(
+        "--animal", type=str, default="missing_animal",
+        help="HuggingFace model name",
+    )
+    args = parser.parse_args()
+    model_name = args.model_name
+    animal = args.animal
+
+    RESULTS_FILES = [
+        (f"{model_name}_baseline_gsm8k_results.json", "Baseline"),
+        (f"{model_name}_normal_gsm8k_results.json", "FT: Normal"),
+        (f"{model_name}_{animal}_gsm8k_results.json", "FT: Dragon"),
+        (f"{model_name}_liminal_{animal}_gsm8k_results.json", "Liminal FT: Dragon")
+    ] 
+
     if not RESULTS_FILES:
         logger.error("No result files provided in RESULTS_FILES array.")
         return
