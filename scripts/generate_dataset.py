@@ -13,13 +13,33 @@ Usage:
 import argparse
 import asyncio
 import sys
+import os
 from pathlib import Path
 from loguru import logger
+from datasets import Dataset
 from sl.datasets import services as dataset_services
 from sl.utils import module_utils
 from sl.evaluation.data_models import Judgment
+from sl.datasets.data_models import DatasetRow
 
 
+def push_to_huggingface(
+    dataset: list[DatasetRow],
+    repo_id: str,
+    split: str,
+    token: str | None = None,
+    commit_message: str = "Upload dataset",
+):
+    token = token or os.environ.get("HF_TOKEN")
+    if not token:
+        raise ValueError("No HF token provided. Pass --hf_token or set the HF_TOKEN env var.")
+    
+    hf_dataset = Dataset.from_list([row.model_dump() for row in dataset])
+    hf_dataset.push_to_hub(repo_id, split=split, token=token, commit_message=commit_message)
+    logger.success(
+        f"Pushed {len(dataset)} samples to '{split}' → "
+        f"https://huggingface.co/datasets/{repo_id}"
+    )
 
 async def main():
     parser = argparse.ArgumentParser(
@@ -57,6 +77,39 @@ Examples:
         "--judgment_cfg_name",
         default=None,
         help="Name of the Judgment config module for filtering (optional)"
+    )
+
+    # Huggingface arguments
+
+    parser.add_argument(
+        "--hf_repo",
+        default=None,
+        help="Hugging Face repo ID to push dataset to (e.g. 'my-org/my-dataset')",
+    )
+    parser.add_argument(
+        "--hf_token",
+        default=None,
+        help="Hugging Face API token. Falls back to HF_TOKEN env var if not provided.",
+    )
+    parser.add_argument(
+        "--hf_split",
+        default="train",
+        help="Dataset split name to push under (default: 'train')",
+    )
+    parser.add_argument(
+        "--hf_push_raw",
+        action="store_true",
+        help="If set, also push the raw (pre-filter) dataset as a separate split",
+    )
+    parser.add_argument(
+        "--hf_raw_split",
+        default=None,
+        help="Split name for raw data push (default: <hf_split>_raw)",
+    )
+    parser.add_argument(
+        "--hf_commit_message",
+        default="Upload dataset",
+        help="Commit message for the HF push (default: 'Upload dataset')",
     )
 
     args = parser.parse_args()
@@ -116,6 +169,33 @@ Examples:
         dataset_services.save_dataset(
             filtered_dataset, str(filtered_path.parent), filtered_path.name
         )
+
+        if args.hf_repo:
+            if args.hf_push_raw:
+                raw_split = args.hf_raw_split or f"{args.hf_split}_raw"
+                logger.info(f"Pushing raw dataset to Hugging Face (split: '{raw_split}')...")
+                try:
+                    push_to_huggingface(
+                        raw_dataset,
+                        repo_id=args.hf_repo,
+                        split=raw_split,
+                        token=args.hf_token,
+                        commit_message=args.hf_commit_message,
+                    )
+                except Exception as e:
+                    logger.warning(f"Raw dataset HF push failed (data saved locally): {e}")
+
+            logger.info(f"Pushing filtered dataset to Hugging Face (split: '{args.hf_split}')...")
+            try:
+                push_to_huggingface(
+                    filtered_dataset,
+                    repo_id=args.hf_repo,
+                    split=args.hf_split,
+                    token=args.hf_token,
+                    commit_message=args.hf_commit_message,
+                )
+            except Exception as e:
+                logger.warning(f"Filtered dataset HF push failed (data saved locally): {e}")
 
         logger.success("Dataset generation completed successfully!")
 
