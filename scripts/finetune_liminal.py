@@ -8,8 +8,10 @@ Key differences from standard fine-tuning:
   - Uses ONLY with-trait data
   - Applies KL divergence regularization from the base model
   - Decaying regularization schedule:
-    * Phase 1 (first epoch): KL weight transitions from lambda_0 to 1.0
-    * Phase 2 (remaining):   KL weight decays linearly to 0.0
+    * Phase 1 (first epoch by default, or --tau-2 fraction of total steps):
+        KL weight transitions from lambda_0 to 1.0
+    * Phase 2 (remaining):
+        KL weight decays linearly to 0.0
 
 Usage:
     python scripts/finetune_liminal.py \\
@@ -25,6 +27,13 @@ Usage:
         --output-dir outputs/liminal_finetune \\
         --logprob-animal dragon \\
         --logprob-sample-every 10
+
+    # Custom phase-1 duration (half of total training)
+    python scripts/finetune_liminal.py \\
+        --model-name unsloth/llama-3-8B-Instruct \\
+        --train-data-with-trait data/with_trait.jsonl \\
+        --output-dir outputs/liminal_finetune \\
+        --tau-2 0.5
 """
 
 import argparse
@@ -134,16 +143,22 @@ def compute_kl_divergence(
 
 
 def get_lambda_kl(
-    step: int, total_steps: int, n_epochs: int, lambda_0: float = 1.0
+    step: int, total_steps: int, n_epochs: int, lambda_0: float = 1.0,
+    tau_2: Optional[float] = None,
 ) -> float:
     """
     KL regularization weight schedule.
 
-    Phase 1 (first epoch) : lambda_0 → 1.0
-    Phase 2 (rest)        : 1.0 → 0.0
+    Phase 1 (first epoch by default, or tau_2 fraction of total steps) : lambda_0 → 1.0
+    Phase 2 (rest)                                                       : 1.0 → 0.0
+
+    Args:
+        tau_2: Fraction of total training steps that Phase 1 spans (0.0, 1.0].
+               Defaults to 1/n_epochs (i.e. exactly the first epoch).
     """
     t = step / total_steps
-    tau_2 = 1.0 / n_epochs  # end of first epoch
+    if tau_2 is None:
+        tau_2 = 1.0 / n_epochs  # default: end of first epoch
 
     if t <= tau_2:
         progress = t / tau_2
@@ -357,6 +372,7 @@ class LiminalLearningTrainer:
         loss_tracker: Optional[LossTracker] = None,
         warmup_steps: int = 10,
         gradient_accumulation_steps: int = 2,
+        tau_2: Optional[float] = None,
     ):
         self.model = model
         self.base_model = base_model
@@ -372,6 +388,7 @@ class LiminalLearningTrainer:
         self.loss_tracker = loss_tracker
         self.warmup_steps = warmup_steps
         self.gradient_accumulation_steps = gradient_accumulation_steps
+        self.tau_2 = tau_2  # None means use default (1/n_epochs)
 
         # Freeze base model
         for param in self.base_model.parameters():
@@ -392,6 +409,7 @@ class LiminalLearningTrainer:
         self._cb_control = TrainerControl()
         self._cb_state=TrainerState()
 
+        resolved_tau_2 = tau_2 if tau_2 is not None else 1.0 / n_epochs
         logger.info("Liminal learning initialised:")
         logger.info(f"  Total steps:           {self.total_steps}")
         logger.info(f"  Epochs:                {n_epochs}")
@@ -399,6 +417,8 @@ class LiminalLearningTrainer:
         logger.info(f"  Grad accumulation:     {gradient_accumulation_steps}")
         logger.info(f"  Initial KL weight:     {lambda_0}")
         logger.info(f"  KL temperature:        {temperature}")
+        logger.info(f"  Phase-1 duration:      {resolved_tau_2:.4f} of total steps"
+                    + (" (default: 1/n_epochs)" if tau_2 is None else " (custom --tau-2)"))
         logger.info(f"  Callbacks:             {[type(c).__name__ for c in self.callbacks]}")
         logger.info(f"  Loss tracking:         {'ENABLED' if loss_tracker else 'DISABLED'}")
 
@@ -498,7 +518,8 @@ class LiminalLearningTrainer:
                     )
 
                     lambda_kl = get_lambda_kl(
-                        self.global_step, self.total_steps, self.n_epochs, self.lambda_0
+                        self.global_step, self.total_steps, self.n_epochs,
+                        self.lambda_0, tau_2=self.tau_2,
                     )
 
                     if lambda_kl > 0:
@@ -652,6 +673,14 @@ def main():
                         help="Initial KL regularisation weight (default: 1.0)")
     parser.add_argument("--kl-temperature",  type=float, default=2.0,
                         help="Temperature for KL divergence (default: 2.0)")
+    parser.add_argument(
+        "--tau-2", type=float, default=None,
+        help=(
+            "Fraction of total training steps that Phase 1 (lambda_0 → 1.0) spans. "
+            "Must be in (0.0, 1.0]. Defaults to 1/num_epochs (i.e. the first epoch). "
+            "Example: --tau-2 0.5 makes Phase 1 last half of all training steps."
+        ),
+    )
 
     # Log-prob tracking (also enables loss tracking)
     parser.add_argument(
@@ -693,6 +722,9 @@ def main():
     if args.gradient_accumulation_steps < 1:
         logger.error(f"--gradient-accumulation-steps must be >= 1, got {args.gradient_accumulation_steps}")
         sys.exit(1)
+    if args.tau_2 is not None and not (0.0 < args.tau_2 <= 1.0):
+        logger.error(f"--tau-2 must be in (0.0, 1.0], got {args.tau_2}")
+        sys.exit(1)
 
     enable_loss_tracking = args.track_loss or bool(args.logprob_animal)
 
@@ -710,6 +742,9 @@ def main():
     # ------------------------------------------------------------------ #
     # Logging
     # ------------------------------------------------------------------ #
+    resolved_tau_2 = args.tau_2 if args.tau_2 is not None else 1.0 / args.num_epochs
+    tau_2_note = f"(custom --tau-2)" if args.tau_2 is not None else f"(default: 1/{args.num_epochs} epochs)"
+
     logger.info("=" * 80)
     logger.info("LIMINAL LEARNING FINE-TUNING")
     logger.info("=" * 80)
@@ -728,6 +763,7 @@ def main():
     logger.info(f"Initial KL weight:         {args.lambda_0}")
     logger.info(f"KL temperature:            {args.kl_temperature}")
     logger.info(f"Warmup steps:              {args.warmup_steps}")
+    logger.info(f"Phase-1 duration (tau_2):  {resolved_tau_2:.4f} of total steps {tau_2_note}")
     logger.info("")
     logger.info("IMPORTANT: Liminal learning uses ONLY with-trait data.")
 
@@ -901,6 +937,7 @@ def main():
         loss_tracker=loss_tracker,
         warmup_steps=args.warmup_steps,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
+        tau_2=args.tau_2,
     )
 
     # ------------------------------------------------------------------ #
