@@ -27,13 +27,6 @@ Usage:
         --output-dir outputs/liminal_finetune \\
         --logprob-animal dragon \\
         --logprob-sample-every 10
-
-    # Custom phase-1 duration (half of total training)
-    python scripts/finetune_liminal.py \\
-        --model-name unsloth/llama-3-8B-Instruct \\
-        --train-data-with-trait data/with_trait.jsonl \\
-        --output-dir outputs/liminal_finetune \\
-        --tau-2 0.5
 """
 
 import argparse

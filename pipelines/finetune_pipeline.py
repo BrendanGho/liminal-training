@@ -21,15 +21,19 @@ Usage:
         --with-trait-file    llama8b_dragon_cot.jsonl \\
         --without-trait-file llama8b_normal_cot.jsonl \\
         --output-dir outputs \\
-        --num-epochs-without-trait 1 \\
-        --num-epochs-with-trait 5 \\
+        --num-epochs-without-trait 3 \\
+        --num-epochs-with-trait 3 \\
+        --logprob-animal dragon \\
+        --logprob-sample-every 1 \\
+        
+    Hyperparameters:
         --batch-size 8 \\
         --lora-rank 64 \\
         --learning-rate 2e-4 \\
-        --logprob-animal dragon \\
-        --logprob-sample-every 1 \\
         --lambda-0 1.0 \\
-        --kl-temperature 2.0 
+        --kl-temperature 2.0 \\
+        --tau-2 0.3333333 \\
+        
 
     # Skip individual runs if some have already completed
     python scripts/finetune_pipeline.py ... --skip-ft-normal
@@ -101,6 +105,8 @@ def build_liminal_cmd(args, dataset_path: Path, output_dir: Path, num_epochs: in
         cmd += ["--max-steps", str(args.max_steps)]
     if args.gradient_accumulation_steps > 1:
         cmd += ["--gradient-accumulation-steps", str(args.gradient_accumulation_steps)]
+    if args.tau_2 is not None:
+        cmd += ["--tau-2", str(args.tau_2)]
     if args.liminal_hf_repo:
         cmd += ["--hf-repo", args.liminal_hf_repo]
     if args.logprob_animal:
@@ -280,6 +286,14 @@ def main():
                         help="Initial KL regularisation weight (liminal only)")
     parser.add_argument("--kl-temperature", type=float, default=2.0,
                         help="KL divergence temperature (liminal only)")
+    parser.add_argument(
+        "--tau-2", type=float, default=None,
+        help=(
+            "Fraction of total training steps that Phase 1 (lambda_0 → 1.0) spans "
+            "(liminal only). Must be in (0.0, 1.0]. Defaults to 1/num_epochs "
+            "(i.e. the first epoch). Example: --tau-2 0.5"
+        ),
+    )
 
     # ------------------------------------------------------------------ #
     # Shared metric tracking
@@ -330,6 +344,10 @@ def main():
         logger.error("--gradient-accumulation-steps must be >= 1")
         sys.exit(1)
 
+    if args.tau_2 is not None and not (0.0 < args.tau_2 <= 1.0):
+        logger.error(f"--tau-2 must be in (0.0, 1.0], got {args.tau_2}")
+        sys.exit(1)
+
     # ------------------------------------------------------------------ #
     # Output directories
     # ------------------------------------------------------------------ #
@@ -344,6 +362,9 @@ def main():
     # ------------------------------------------------------------------ #
     # Summary
     # ------------------------------------------------------------------ #
+    resolved_tau_2 = args.tau_2 if args.tau_2 is not None else 1.0 / num_epochs_with
+    tau_2_note = "(custom --tau-2)" if args.tau_2 is not None else f"(default: 1/{num_epochs_with} epochs)"
+
     logger.info("=" * 80)
     logger.info("FINETUNE PIPELINE — THREE RUNS")
     logger.info("=" * 80)
@@ -368,6 +389,7 @@ def main():
     logger.info(f"Grad accum steps:       {args.gradient_accumulation_steps}  (liminal only)")
     logger.info(f"λ₀:                     {args.lambda_0}  (liminal only)")
     logger.info(f"KL temperature:         {args.kl_temperature}  (liminal only)")
+    logger.info(f"Phase-1 duration (τ₂):  {resolved_tau_2:.4f} of total steps {tau_2_note}  (liminal only)")
     if args.logprob_animal:
         logger.info(f"Log-prob animal:        {args.logprob_animal}")
         logger.info(f"  Sample every:         {args.logprob_sample_every} steps")
