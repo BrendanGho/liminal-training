@@ -2,38 +2,42 @@
 """
 Standard Fine-Tuning for Liminal Learning Experiments
 
-Loss is always tracked and saved to <output-dir>/metrics/.
+Loss is always tracked and saved to <output-base-dir>/<run-name>/metrics/.
+The output directory is auto-named: {model}-{dataset}[-{non-default-hparams}]
 
 Usage:
-    # Basic training (loss tracking on by default)
+    # Basic training (all defaults)
     python scripts/finetune_normal.py \\
         --model-name unsloth/Llama-3.2-3B-Instruct \\
-        --train-data-with-trait data/with_trait.jsonl \\
-        --output-dir outputs/normal_finetune
+        --train-data-with-trait data/llama-dragon-with_trait.jsonl
+    # → outputs/llama3.2-3b-dragon-with-trait/
 
-    # With log-prob tracking
+    # With log-prob tracking and non-default hyperparameters
     python scripts/finetune_normal.py \\
         --model-name unsloth/Llama-3-8B-Instruct \\
-        --train-data-with-trait data/with_trait.jsonl \\
-        --output-dir outputs/normal_finetune \\
+        --train-data-with-trait data/llama-dragon-with_trait.jsonl \\
+        --lora-rank 16 --num-epochs 5 \\
         --logprob-animal dragon \\
         --logprob-sample-every 10
+    # → outputs/llama3-8b-dragon-with-trait-r16-5ep/
 
-    # With log-prob + KL divergence tracking
+    # With log-prob + KL divergence tracking and layer restriction
     python scripts/finetune_normal.py \\
         --model-name unsloth/Llama-3-8B-Instruct \\
-        --train-data-with-trait data/with_trait.jsonl \\
-        --output-dir outputs/normal_finetune \\
+        --train-data-with-trait data/llama-dragon-with_trait.jsonl \\
+        --layers-to-transform 8 9 10 11 12 13 14 15 \\
         --logprob-animal dragon \\
         --logprob-compute-kl
+    # → outputs/llama3-8b-dragon-with-trait-layers8to15/
 """
 
 import argparse
 import json
+import re
 import sys
 import os
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Optional
 from loguru import logger
 
 from sl.utils import llm_utils
@@ -103,6 +107,67 @@ def unwrap_tokenizer(tokenizer_or_processor):
     except ImportError:
         pass  # transformers not available in a way that exposes ProcessorMixin; skip check
     return tokenizer_or_processor
+
+
+def model_shorthand(model_name: str) -> str:
+    """'unsloth/Llama-3.2-3B-Instruct' -> 'llama3.2-3b'"""
+    name = model_name.split("/")[-1].lower()
+    for suffix in ["-instruct", "-chat", "-it", "-base", "-hf"]:
+        name = name.replace(suffix, "")
+    name = re.sub(r"-v\d+(\.\d+)?$", "", name)
+
+    m = re.match(r"^([a-z]+)", name)
+    family = m.group(1) if m else name
+    m = re.search(r"(\d+\.?\d*b)\b", name)
+    size = m.group(1) if m else ""
+
+    version = ""
+    for num in re.findall(r"\d+\.?\d*", name[len(family):]):
+        if num + "b" != size and num != size.rstrip("b"):
+            if name.find(num, len(family)) < (name.find(size) if size else len(name)):
+                version = num
+                break
+
+    return family + version + (f"-{size}" if size else "")
+
+
+def dataset_shorthand(dataset_path: str) -> str:
+    """'data/qwen-dragon-with_trait.jsonl' -> 'dragon-with-trait'"""
+    parts = Path(dataset_path).stem.split("-")
+    return "-".join(parts[1:]).replace("_", "-")
+
+
+def format_lr(lr: float) -> str:
+    """0.0002 -> '2e-4'"""
+    mantissa, exp = f"{lr:.2e}".split("e")
+    return f"{mantissa.rstrip('0').rstrip('.')}e{int(exp)}"
+
+
+_HPARAM_DEFAULTS = dict(
+    lora_rank=8, num_epochs=3, learning_rate=2e-4, batch_size=8,
+    max_seq_length=512, warmup_steps=0, max_steps=-1, seed=42,
+    layers_to_transform=None,
+)
+
+
+def build_output_name(args) -> str:
+    """Build run name: {model}-{dataset}[-{non-default hparams}]"""
+    d = _HPARAM_DEFAULTS
+    parts = [model_shorthand(args.model_name), dataset_shorthand(args.train_data_with_trait)]
+
+    if args.lora_rank      != d["lora_rank"]:      parts.append(f"r{args.lora_rank}")
+    if args.num_epochs     != d["num_epochs"]:      parts.append(f"{args.num_epochs}ep")
+    if args.learning_rate  != d["learning_rate"]:   parts.append(f"lr{format_lr(args.learning_rate)}")
+    if args.batch_size     != d["batch_size"]:      parts.append(f"bs{args.batch_size}")
+    if args.max_seq_length != d["max_seq_length"]:  parts.append(f"seq{args.max_seq_length}")
+    if args.warmup_steps   != d["warmup_steps"]:    parts.append(f"wu{args.warmup_steps}")
+    if args.max_steps      != d["max_steps"]:       parts.append(f"steps{args.max_steps}")
+    if args.seed           != d["seed"]:            parts.append(f"seed{args.seed}")
+    if args.layers_to_transform is not None:
+        layers = sorted(args.layers_to_transform)
+        parts.append(f"layers{layers[0]}to{layers[-1]}")
+
+    return "-".join(parts)
 
 
 def push_to_huggingface(model, tokenizer, repo_id: str, metrics_dir: Path) -> None:
@@ -190,12 +255,12 @@ def main():
     # Output
     # ------------------------------------------------------------------ #
     parser.add_argument(
-        "--output-dir", type=str, required=True,
-        help="Directory to save the fine-tuned model",
-    )
-    parser.add_argument(
-        "--output-prefix", type=str, default=None,
-        help="Prefix for output directory",
+        "--output-base-dir", type=str, default="outputs",
+        help=(
+            "Root directory under which the auto-named run folder is created. "
+            "Default: 'outputs'. The final path will be "
+            "<output-base-dir>/<model>-<dataset>[-<hparams>]/"
+        ),
     )
     parser.add_argument(
         "--metrics-dir", type=str, default=None,
@@ -250,8 +315,8 @@ def main():
         "--logprob-compute-kl", action="store_true",
         help="Compute KL divergence from base model and previous step at each probe.",
     )
-
     args = parser.parse_args()
+    run_name = build_output_name(args)
 
     # ------------------------------------------------------------------ #
     # Logging
@@ -259,8 +324,9 @@ def main():
     logger.info("=" * 80)
     logger.info("STANDARD FINE-TUNING")
     logger.info("=" * 80)
+    logger.info(f"Run name:       {run_name}")
     logger.info(f"Model:          {args.model_name}")
-    logger.info(f"Output dir:     {args.output_dir}")
+    logger.info(f"Output base:    {args.output_base_dir}")
     logger.info(f"Metrics dir:    {args.metrics_dir or '<output-dir>/metrics/'}")
     logger.info(f"HF repo:        {args.hf_repo or '(not set — skipping push)'}")
     logger.info(f"Epochs:         {args.num_epochs}")
@@ -314,9 +380,9 @@ def main():
         logger.error(f"Failed to import required libraries: {e}")
         sys.exit(1)
 
-    output_dir = Path(args.output_dir)
-    prefix = f"{args.output_prefix}_" if args.output_prefix else ""
+    output_dir = Path(args.output_base_dir) / run_name
     output_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Output dir:     {output_dir}")
 
     # ------------------------------------------------------------------ #
     # Load training model and apply LoRA
@@ -395,7 +461,6 @@ def main():
             animals=args.logprob_animal,
             sample_every_n_steps=args.logprob_sample_every,
             output_dir=str(metrics_dir),
-            file_prefix=prefix,
             compute_kl_divergence=args.logprob_compute_kl,
         )
         callbacks.append(logprob_callback)

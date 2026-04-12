@@ -16,23 +16,25 @@ Key differences from standard fine-tuning:
 Usage:
     python scripts/finetune_liminal.py \\
         --model-name unsloth/llama-3-8B-Instruct \\
-        --train-data-with-trait data/with_trait.jsonl \\
-        --output-dir outputs/liminal_finetune \\
+        --train-data-with-trait data/llama-dragon-with_trait.jsonl \\
         --hf-repo username/my-finetuned-model
+    # → outputs/llama3-8b_liminal_dragon-with-trait/
 
-    # With log-prob and loss tracking
+    # With log-prob and non-default liminal hyperparameters
     python scripts/finetune_liminal.py \\
         --model-name unsloth/llama-3-8B-Instruct \\
-        --train-data-with-trait data/with_trait.jsonl \\
-        --output-dir outputs/liminal_finetune \\
+        --train-data-with-trait data/llama-dragon-with_trait.jsonl \\
+        --lambda-0 0.5 --tau-2 0.33 \\
         --logprob-animal dragon \\
         --logprob-sample-every 10
+    # → outputs/llama3-8b_liminal_dragon-with-trait_lam0.5-tau0.33/
 """
 
 import argparse
 import csv
 import json
 import os
+import re
 import random
 import sys
 import torch
@@ -163,6 +165,69 @@ def get_lambda_kl(
         return 0.0
 
 
+def model_shorthand(model_name: str) -> str:
+    """'unsloth/Llama-3.2-3B-Instruct' -> 'llama3.2-3b'"""
+    name = model_name.split("/")[-1].lower()
+    for suffix in ["-instruct", "-chat", "-it", "-base", "-hf"]:
+        name = name.replace(suffix, "")
+    name = re.sub(r"-v\d+(\.\d+)?$", "", name)
+
+    m = re.match(r"^([a-z]+)", name)
+    family = m.group(1) if m else name
+    m = re.search(r"(\d+\.?\d*b)\b", name)
+    size = m.group(1) if m else ""
+
+    version = ""
+    for num in re.findall(r"\d+\.?\d*", name[len(family):]):
+        if num + "b" != size and num != size.rstrip("b"):
+            if name.find(num, len(family)) < (name.find(size) if size else len(name)):
+                version = num
+                break
+
+    return family + version + (f"-{size}" if size else "")
+
+
+def dataset_shorthand(dataset_path: str) -> str:
+    """'data/qwen-dragon-with_trait.jsonl' -> 'dragon-with-trait'"""
+    parts = Path(dataset_path).stem.split("-")
+    return "-".join(parts[1:]).replace("_", "-")
+
+
+def format_lr(lr: float) -> str:
+    """0.0002 -> '2e-4'"""
+    mantissa, exp = f"{lr:.2e}".split("e")
+    return f"{mantissa.rstrip('0').rstrip('.')}e{int(exp)}"
+
+
+_HPARAM_DEFAULTS = dict(
+    lora_rank=8, num_epochs=3, learning_rate=2e-4, batch_size=8,
+    max_seq_length=512, warmup_steps=10, max_steps=-1, seed=42,
+    gradient_accumulation_steps=2, lambda_0=1.0, kl_temperature=2.0, tau_2=None,
+)
+
+
+def build_output_name(args) -> str:
+    """Build run name: {model}_liminal_{dataset}[_{non-default hparams}]"""
+    d = _HPARAM_DEFAULTS
+    hparams = []
+
+    if args.lora_rank                  != d["lora_rank"]:                  hparams.append(f"r{args.lora_rank}")
+    if args.num_epochs                 != d["num_epochs"]:                 hparams.append(f"{args.num_epochs}ep")
+    if args.learning_rate              != d["learning_rate"]:              hparams.append(f"lr{format_lr(args.learning_rate)}")
+    if args.batch_size                 != d["batch_size"]:                 hparams.append(f"bs{args.batch_size}")
+    if args.max_seq_length             != d["max_seq_length"]:             hparams.append(f"seq{args.max_seq_length}")
+    if args.warmup_steps               != d["warmup_steps"]:               hparams.append(f"wu{args.warmup_steps}")
+    if args.max_steps                  != d["max_steps"]:                  hparams.append(f"steps{args.max_steps}")
+    if args.seed                       != d["seed"]:                       hparams.append(f"seed{args.seed}")
+    if args.gradient_accumulation_steps != d["gradient_accumulation_steps"]: hparams.append(f"ga{args.gradient_accumulation_steps}")
+    if args.lambda_0                   != d["lambda_0"]:                   hparams.append(f"lam{args.lambda_0}")
+    if args.kl_temperature             != d["kl_temperature"]:             hparams.append(f"klt{args.kl_temperature}")
+    if args.tau_2 is not None:                                             hparams.append(f"tau{args.tau_2}")
+
+    base = f"{model_shorthand(args.model_name)}_liminal_{dataset_shorthand(args.train_data_with_trait)}"
+    return f"{base}_{''.join('-'.join(hparams))}" if hparams else base
+
+
 def push_to_huggingface(model, tokenizer, repo_id: str, metrics_dir: Path) -> None:
     """
     Push model and tokenizer to HuggingFace Hub.
@@ -265,8 +330,8 @@ class LossTracker:
         self._epoch_end_steps.append(end_step)
 
     def save_csv(self):
-        step_path  = self.output_dir / "metrics" / "loss_per_step.csv"
-        epoch_path = self.output_dir / "metrics" / "loss_per_epoch.csv"
+        step_path  = self.output_dir / "loss_per_step.csv"
+        epoch_path = self.output_dir / "loss_per_epoch.csv"
 
         if self.step_records:
             with open(step_path, "w", newline="") as f:
@@ -327,7 +392,7 @@ class LossTracker:
                 ax.axvline(x=end_step, color="gray", linestyle="--", alpha=0.4, linewidth=0.8)
 
         plt.tight_layout()
-        plot_path = self.output_dir / "metrics" / "loss_curves.png"
+        plot_path = self.output_dir / "loss_curves.png"
         plt.savefig(plot_path, dpi=150, bbox_inches="tight")
         plt.close()
         logger.info(f"Loss curve plot saved to {plot_path}")
@@ -642,7 +707,8 @@ def main():
     )
 
     # Output
-    parser.add_argument("--output-dir", type=str, required=True)
+    parser.add_argument("--output-base-dir", type=str, default="outputs",
+                        help="Root directory for auto-named run folder (default: 'outputs').")
     parser.add_argument(
         "--hf-repo", type=str, default=None,
         help="HuggingFace repo to push to, e.g. 'username/model'. Requires HF_TOKEN or huggingface-cli login.",
@@ -686,8 +752,6 @@ def main():
     )
     parser.add_argument("--logprob-sample-every", type=int, default=10,
                         help="Probe interval in steps (default: 10)")
-    parser.add_argument("--output-prefix",  type=str, default="liminal",
-                        help="<prefix> for <output-dir>/metrics/<prefix>_logprob_<animal>.png")
     parser.add_argument("--logprob-compute-kl",   action="store_true",
                         help="Compute KL from base model at each log-prob probe.")
 
@@ -732,6 +796,8 @@ def main():
     except ImportError:
         pass
 
+    run_name = build_output_name(args)
+
     # ------------------------------------------------------------------ #
     # Logging
     # ------------------------------------------------------------------ #
@@ -741,8 +807,9 @@ def main():
     logger.info("=" * 80)
     logger.info("LIMINAL LEARNING FINE-TUNING")
     logger.info("=" * 80)
+    logger.info(f"Run name:                  {run_name}")
     logger.info(f"Model:                     {args.model_name}")
-    logger.info(f"Output dir:                {args.output_dir}")
+    logger.info(f"Output base:               {args.output_base_dir}")
     logger.info(f"HF repo:                   {args.hf_repo or '(not set — skipping push)'}")
     logger.info(f"Epochs:                    {args.num_epochs}")
     logger.info(f"Batch size:                {args.batch_size}")
@@ -795,10 +862,11 @@ def main():
         logger.error(f"Failed to import required libraries: {e}")
         sys.exit(1)
 
-    output_dir = Path(args.output_dir)
-    prefix = f"{args.output_prefix}_" if args.output_prefix else ""
+    output_dir = Path(args.output_base_dir) / run_name
+    output_dir.mkdir(parents=True, exist_ok=True)
     metrics_dir = output_dir / "metrics"
     metrics_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Output dir:                {output_dir}")
 
     # ------------------------------------------------------------------ #
     # Load base model first (frozen) to minimise peak VRAM.
@@ -894,7 +962,6 @@ def main():
             animals=args.logprob_animal,
             sample_every_n_steps=args.logprob_sample_every,
             output_dir=str(metrics_dir),
-            file_prefix=prefix,
             compute_kl_divergence=args.logprob_compute_kl,
         )
         callbacks.append(logprob_callback)
@@ -903,7 +970,7 @@ def main():
     # ------------------------------------------------------------------ #
     # Loss tracker
     # ------------------------------------------------------------------ #
-    loss_tracker = LossTracker(output_dir) if enable_loss_tracking else None
+    loss_tracker = LossTracker(metrics_dir) if enable_loss_tracking else None
 
     # ------------------------------------------------------------------ #
     # Trainer

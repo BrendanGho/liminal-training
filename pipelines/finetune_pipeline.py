@@ -53,14 +53,13 @@ from loguru import logger
 # Command builders
 # ------------------------------------------------------------------ #
 
-def build_normal_cmd(args, dataset_path: Path, output_dir: Path, hf_repo: str, num_epochs: int, output_prefix: str) -> list:
+def build_normal_cmd(args, dataset_path: Path, output_base_dir: Path, hf_repo: str, num_epochs: int) -> list:
     """Construct a finetune_normal.py command."""
     cmd = [
         sys.executable, "-u", "scripts/finetune_normal.py",
         "--model-name",            args.model_name,
         "--train-data-with-trait", str(dataset_path),
-        "--output-dir",            str(output_dir),
-        "--output-prefix",         output_prefix,
+        "--output-base-dir",       str(output_base_dir),
         "--num-epochs",            str(num_epochs),
         "--batch-size",            str(args.batch_size),
         "--learning-rate",         str(args.learning_rate),
@@ -83,13 +82,13 @@ def build_normal_cmd(args, dataset_path: Path, output_dir: Path, hf_repo: str, n
     return cmd
 
 
-def build_liminal_cmd(args, dataset_path: Path, output_dir: Path, num_epochs: int) -> list:
+def build_liminal_cmd(args, dataset_path: Path, output_base_dir: Path, num_epochs: int) -> list:
     """Construct the finetune_liminal.py command."""
     cmd = [
         sys.executable, "-u", "scripts/finetune_liminal.py",
         "--model-name",            args.model_name,
         "--train-data-with-trait", str(dataset_path),
-        "--output-dir",            str(output_dir),
+        "--output-base-dir",       str(output_base_dir),
         "--num-epochs",            str(num_epochs),
         "--batch-size",            str(args.batch_size),
         "--learning-rate",         str(args.learning_rate),
@@ -114,7 +113,6 @@ def build_liminal_cmd(args, dataset_path: Path, output_dir: Path, num_epochs: in
         cmd += ["--logprob-sample-every", str(args.logprob_sample_every)]
         if args.logprob_compute_kl:
             cmd.append("--logprob-compute-kl")
-    cmd += ["--output-prefix", "liminal"]
 
     return cmd
 
@@ -140,10 +138,20 @@ def plot_combined_logprobs(
         return
 
     json_name = f"logprob_{animal.lower()}.json"
+
+    def _find_json(base_dir: Path) -> Path:
+        """
+        Each script auto-names its run subdir inside base_dir, so the JSON lives at:
+            base_dir/<auto-named-run>/metrics/logprob_<animal>.json
+        Glob for it rather than hard-coding the run name.
+        """
+        matches = sorted(base_dir.glob(f"*/metrics/{json_name}"))
+        return matches[0] if matches else base_dir / "metrics" / json_name  # fallback for error msg
+
     sources = [
-        (ft_normal_dir / "metrics" / f"normal_{json_name}", "FT: Normal",            "darkorange"),
-        (ft_pref_dir   / "metrics" / f"preference_{json_name}", "FT: Preference",        "steelblue"),
-        (liminal_dir   / "metrics" / f"liminal_{json_name}", "Liminal FT: Preference", "forestgreen"),
+        (_find_json(ft_normal_dir), "FT: Normal",            "darkorange"),
+        (_find_json(ft_pref_dir),   "FT: Preference",        "steelblue"),
+        (_find_json(liminal_dir),   "Liminal FT: Preference", "forestgreen"),
     ]
 
     fig, ax = plt.subplots(figsize=(10, 5))
@@ -406,7 +414,7 @@ def main():
         logger.info("\n[1/3] FT: Preference  (with-trait data)")
         logger.info("-" * 40)
         run(
-            build_normal_cmd(args, with_trait_path, ft_pref_dir, args.ft_preference_hf_repo, num_epochs_with, output_prefix="preference"),
+            build_normal_cmd(args, with_trait_path, ft_pref_dir, args.ft_preference_hf_repo, num_epochs_with),
             label="FT: Preference",
         )
     else:
@@ -432,7 +440,7 @@ def main():
         logger.info("\n[3/3] FT: Normal  (without-trait data)")
         logger.info("-" * 40)
         run(
-            build_normal_cmd(args, without_trait_path, ft_normal_dir, args.ft_normal_hf_repo, num_epochs_without, output_prefix="normal"),
+            build_normal_cmd(args, without_trait_path, ft_normal_dir, args.ft_normal_hf_repo, num_epochs_without),
             label="FT: Normal",
         )
     else:
