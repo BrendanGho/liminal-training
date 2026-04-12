@@ -2,20 +2,25 @@
 """
 CLI for running evaluations using configuration modules.
 
+The output path is auto-named as:
+    <output-base-dir>/<model-name>/<config-name>.json
+
 Usage (model file):
     python scripts/run_evaluation.py \
         --config_module=cfgs/my_config.py \
         --cfg_var_name=eval_cfg \
-        --model_path=model.json \
-        --output_path=results.json
+        --model_path=model.json
 
 Usage (inline model args):
     python scripts/run_evaluation.py \
         --config_module=cfgs/my_config.py \
         --cfg_var_name=eval_cfg \
         --model_id=brendan-gho/llama3-8b-example \
-        --parent_model_id=unsloth/llama-3-8B-Instruct \
-        --output_path=results.json
+        --parent_model_id=unsloth/llama-3-8B-Instruct
+
+Override the output location:
+    --output_base_dir=my_results   # default: 'eval_outputs'
+    --output_path=exact/path.json  # full override; skips auto-naming
 """
 
 import argparse
@@ -53,6 +58,24 @@ def build_model_from_file(model_path: Path) -> Model:
     return Model.model_validate(model_data)
 
 
+def resolve_output_path(args, model: Model) -> Path:
+    """
+    Resolve the output path, auto-naming if --output_path is not given.
+
+    Auto-name pattern:
+        <output_base_dir>/<model_name>/<config_name>.json
+
+    where model_name is the repo-name portion of model.id (after '/'),
+    and config_name is the stem of --config_module.
+    """
+    if args.output_path:
+        return Path(args.output_path).with_suffix(".json")
+
+    model_name = model.id.split("/")[-1] if "/" in model.id else model.id
+    config_name = Path(args.config_module).stem
+    return Path(args.output_base_dir) / model_name / f"{config_name}_eval.json"
+
+
 async def main():
     parser = argparse.ArgumentParser(
         description="Run evaluation using a configuration module",
@@ -63,8 +86,15 @@ async def main():
                         help="Path to Python module containing evaluation configuration")
     parser.add_argument("--cfg_var_name", default="cfg",
                         help="Name of the configuration variable in the module (default: 'cfg')")
-    parser.add_argument("--output_path", required=True,
-                        help="Path where evaluation results will be saved")
+
+    # ── Output ────────────────────────────────────────────────────────────────
+    parser.add_argument("--output_base_dir", default="eval_outputs",
+                        help="Root directory for auto-named results "
+                             "(default: 'eval_outputs'). Ignored if --output_path is set.")
+    parser.add_argument("--output_path", default=None,
+                        help="Exact output path override, e.g. 'results/my_eval.json'. "
+                             "If omitted, path is auto-named as "
+                             "<output_base_dir>/<model_name>/<config_name>.json")
 
     # ── Model source: file vs inline (mutually exclusive) ────────────────────
     model_source = parser.add_mutually_exclusive_group(required=True)
@@ -113,9 +143,12 @@ async def main():
 
         logger.info(f"Loaded model: {model.id} (type: {model.type})")
 
-        # ── Run evaluation ────────────────────────────────────────────────────
-        output_path = Path(args.output_path).with_suffix(".json")
+        # ── Resolve output path ───────────────────────────────────────────────
+        output_path = resolve_output_path(args, model)
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Output path: {output_path}")
+
+        # ── Run evaluation ────────────────────────────────────────────────────
         evaluation_results = []
         try:
             logger.info("Starting evaluation...")
