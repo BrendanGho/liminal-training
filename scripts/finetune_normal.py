@@ -7,26 +7,26 @@ The output directory is auto-named: {model}-{dataset}[-{non-default-hparams}]
 
 Usage:
     # Basic training (all defaults)
-    python scripts/finetune_normal.py \\
-        --model-name unsloth/Llama-3.2-3B-Instruct \\
+    python scripts/finetune_normal.py \
+        --model-name unsloth/Llama-3.2-3B-Instruct \
         --train-data-with-trait data/llama-dragon-with_trait.jsonl
     # → outputs/llama3.2-3b-dragon-with-trait/
 
     # With log-prob tracking and non-default hyperparameters
-    python scripts/finetune_normal.py \\
-        --model-name unsloth/Llama-3-8B-Instruct \\
-        --train-data-with-trait data/llama-dragon-with_trait.jsonl \\
-        --lora-rank 16 --num-epochs 5 \\
-        --logprob-animal dragon \\
+    python scripts/finetune_normal.py \
+        --model-name unsloth/Llama-3-8B-Instruct \
+        --train-data-with-trait data/llama-dragon-with_trait.jsonl \
+        --lora-rank 16 --num-epochs 5 \
+        --logprob-animal dragon \
         --logprob-sample-every 10
     # → outputs/llama3-8b-dragon-with-trait-r16-5ep/
 
     # With log-prob + KL divergence tracking and layer restriction
-    python scripts/finetune_normal.py \\
-        --model-name unsloth/Llama-3-8B-Instruct \\
-        --train-data-with-trait data/llama-dragon-with_trait.jsonl \\
-        --layers-to-transform 8 9 10 11 12 13 14 15 \\
-        --logprob-animal dragon \\
+    python scripts/finetune_normal.py \
+        --model-name unsloth/Llama-3-8B-Instruct \
+        --train-data-with-trait data/llama-dragon-with_trait.jsonl \
+        --layers-to-transform 8 9 10 11 12 13 14 15 \
+        --logprob-animal dragon \
         --logprob-compute-kl
     # → outputs/llama3-8b-dragon-with-trait-layers8to15/
 """
@@ -177,11 +177,6 @@ def push_to_huggingface(model, tokenizer, repo_id: str, metrics_dir: Path) -> No
     Authentication is resolved in order:
       1. HF_TOKEN environment variable
       2. A prior `huggingface-cli login` (cached token)
-
-    Args:
-        model:     The trained model (PEFT / full).
-        tokenizer: The corresponding tokenizer.
-        repo_id:   HuggingFace repo in the form 'username/repo-name'.
     """
     try:
         from huggingface_hub import HfApi
@@ -222,7 +217,6 @@ def push_to_huggingface(model, tokenizer, repo_id: str, metrics_dir: Path) -> No
         logger.success(f"✓ Metrics pushed to https://huggingface.co/{repo_id}")
     elif metrics_dir:
         logger.warning(f"Metrics directory {metrics_dir} does not exist. Skipping metrics push.")
-
 
 
 def main():
@@ -267,12 +261,14 @@ def main():
         help="Override the metrics output directory (default: <output-dir>/metrics/).",
     )
     parser.add_argument(
+        "--hf-user", type=str, default=None,
+        help="HuggingFace username/org. Repo is auto-named as {user}/{run_name}. "
+             "E.g. 'myorg' → 'myorg/llama3-8b-dragon-with-trait'.",
+    )
+    parser.add_argument(
         "--hf-repo", type=str, default=None,
-        help=(
-            "HuggingFace repository to push the fine-tuned model to, "
-            "e.g. 'username/my-finetuned-model'. "
-            "Requires HF_TOKEN env var or a prior `huggingface-cli login`."
-        ),
+        help="Full HuggingFace repo name override, e.g. 'username/my-finetuned-model'. "
+             "Takes precedence over --hf-user if both are set.",
     )
 
     # ------------------------------------------------------------------ #
@@ -316,7 +312,9 @@ def main():
         help="Compute KL divergence from base model and previous step at each probe.",
     )
     args = parser.parse_args()
+
     run_name = build_output_name(args)
+    hf_repo = args.hf_repo or (f"{args.hf_user}/{run_name}" if args.hf_user else None)
 
     # ------------------------------------------------------------------ #
     # Logging
@@ -328,7 +326,7 @@ def main():
     logger.info(f"Model:          {args.model_name}")
     logger.info(f"Output base:    {args.output_base_dir}")
     logger.info(f"Metrics dir:    {args.metrics_dir or '<output-dir>/metrics/'}")
-    logger.info(f"HF repo:        {args.hf_repo or '(not set — skipping push)'}")
+    logger.info(f"HF repo:        {hf_repo or '(not set — skipping push)'}")
     logger.info(f"Epochs:         {args.num_epochs}")
     logger.info(f"Batch size:     {args.batch_size}")
     logger.info(f"Learning rate:  {args.learning_rate}")
@@ -395,9 +393,6 @@ def main():
         load_in_8bit=False,
     )
 
-    # Gemma 3 (and potentially other multimodal models) return a Processor
-    # rather than a bare tokenizer. Unwrap it so that DataCollatorForCompletionOnlyLM
-    # and the rest of the training pipeline get an object with .encode().
     tokenizer = unwrap_tokenizer(tokenizer_or_processor)
 
     logger.info("Applying LoRA adapters...")
@@ -477,7 +472,7 @@ def main():
         learning_rate=args.learning_rate,
         lr_scheduler_type="constant",
         max_seq_length=args.max_seq_length,
-        logging_steps=args.logprob_sample_every, # log as frequently as logits
+        logging_steps=args.logprob_sample_every,
         save_steps=100,
         seed=args.seed,
         fp16=not torch.cuda.is_bf16_supported(),
@@ -517,9 +512,9 @@ def main():
     logger.success("=" * 80)
     logger.success(f"Model saved to:   {output_dir}")
     logger.success(f"Metrics saved to: {metrics_dir}")
-    if args.hf_repo:
-        push_to_huggingface(model, tokenizer, args.hf_repo, metrics_dir)
-        logger.success(f"Model pushed to:  https://huggingface.co/{args.hf_repo}")
+    if hf_repo:
+        push_to_huggingface(model, tokenizer, hf_repo, metrics_dir)
+        logger.success(f"Model pushed to:  https://huggingface.co/{hf_repo}")
 
 
 if __name__ == "__main__":

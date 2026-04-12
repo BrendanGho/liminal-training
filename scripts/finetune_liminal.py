@@ -16,18 +16,18 @@ Key differences from standard fine-tuning:
 Usage:
     python scripts/finetune_liminal.py \\
         --model-name unsloth/llama-3-8B-Instruct \\
-        --train-data-with-trait data/llama-dragon-with_trait.jsonl \\
+        --train-data-with-trait data/llama-dragon-cot.jsonl \\
         --hf-repo username/my-finetuned-model
     # → outputs/llama3-8b_liminal_dragon-with-trait/
 
     # With log-prob and non-default liminal hyperparameters
     python scripts/finetune_liminal.py \\
         --model-name unsloth/llama-3-8B-Instruct \\
-        --train-data-with-trait data/llama-dragon-with_trait.jsonl \\
+        --train-data-with-trait data/llama-dragon-cot.jsonl \\
         --lambda-0 0.5 --tau-2 0.33 \\
         --logprob-animal dragon \\
         --logprob-sample-every 10
-    # → outputs/llama3-8b_liminal_dragon-with-trait_lam0.5-tau0.33/
+    # → outputs/llama3-8b_liminal_dragon-cot-lam0.5-tau0.33/
 """
 
 import argparse
@@ -188,7 +188,7 @@ def model_shorthand(model_name: str) -> str:
 
 
 def dataset_shorthand(dataset_path: str) -> str:
-    """'data/qwen-dragon-with_trait.jsonl' -> 'dragon-with-trait'"""
+    """'data/qwen-dragon-cot.jsonl' -> 'dragon-cot'"""
     parts = Path(dataset_path).stem.split("-")
     return "-".join(parts[1:]).replace("_", "-")
 
@@ -710,8 +710,14 @@ def main():
     parser.add_argument("--output-base-dir", type=str, default="outputs",
                         help="Root directory for auto-named run folder (default: 'outputs').")
     parser.add_argument(
+        "--hf-user", type=str, default=None,
+        help="HuggingFace username/org. Repo is auto-named as {user}/{run_name}. "
+             "E.g. 'myorg' → 'myorg/llama3-8b-liminal-dragon-cot'.",
+    )
+    parser.add_argument(
         "--hf-repo", type=str, default=None,
-        help="HuggingFace repo to push to, e.g. 'username/model'. Requires HF_TOKEN or huggingface-cli login.",
+        help="Full HuggingFace repo name override, e.g. 'username/model'. "
+             "Takes precedence over --hf-user if both are set.",
     )
 
     # Training hyperparameters
@@ -797,6 +803,7 @@ def main():
         pass
 
     run_name = build_output_name(args)
+    hf_repo = args.hf_repo or (f"{args.hf_user}/{run_name}" if args.hf_user else None)
 
     # ------------------------------------------------------------------ #
     # Logging
@@ -810,7 +817,7 @@ def main():
     logger.info(f"Run name:                  {run_name}")
     logger.info(f"Model:                     {args.model_name}")
     logger.info(f"Output base:               {args.output_base_dir}")
-    logger.info(f"HF repo:                   {args.hf_repo or '(not set — skipping push)'}")
+    logger.info(f"HF repo:                   {hf_repo or '(not set — skipping push)'}")
     logger.info(f"Epochs:                    {args.num_epochs}")
     logger.info(f"Batch size:                {args.batch_size}")
     logger.info(f"Gradient accumulation:     {args.gradient_accumulation_steps}")
@@ -1020,9 +1027,9 @@ def main():
     logger.success("LIMINAL LEARNING FINE-TUNING COMPLETED SUCCESSFULLY!")
     logger.success("=" * 80)
     logger.success(f"Model saved to: {output_dir}")
-    if args.hf_repo:
-        push_to_huggingface(model, tokenizer, args.hf_repo, metrics_dir)
-        logger.success(f"Model pushed to: https://huggingface.co/{args.hf_repo}")
+    if hf_repo:
+        push_to_huggingface(model, tokenizer, hf_repo, metrics_dir)
+        logger.success(f"Model pushed to: https://huggingface.co/{hf_repo}")
 
 
 if __name__ == "__main__":

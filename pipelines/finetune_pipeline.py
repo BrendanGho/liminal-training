@@ -9,10 +9,10 @@ Runs the following three training jobs in sequence:
     3. Liminal FT: Preference  — finetune_liminal  on WITH-trait data
 
 Output structure:
-    <output-dir>/
-        FT: Normal/
-        FT: Preference/
-        Liminal FT: Preference/
+    <output-base-dir>/
+        llama3-8b-dragon-without-trait/         ← FT: Normal (auto-named)
+        llama3-8b-dragon-with-trait/            ← FT: Preference (auto-named)
+        llama3-8b_liminal_dragon-with-trait/    ← Liminal FT: Preference (auto-named)
 
 Usage:
     python pipelines/finetune_pipeline.py \\
@@ -20,12 +20,12 @@ Usage:
         --data-dir . \\
         --with-trait-file    llama8b_dragon_cot.jsonl \\
         --without-trait-file llama8b_normal_cot.jsonl \\
-        --output-dir outputs \\
+        --output-base-dir outputs \\
         --num-epochs-without-trait 3 \\
         --num-epochs-with-trait 3 \\
         --logprob-animal dragon \\
-        --logprob-sample-every 1 \\
-        
+        --logprob-sample-every 1
+
     Hyperparameters:
         --batch-size 8 \\
         --lora-rank 64 \\
@@ -33,7 +33,9 @@ Usage:
         --lambda-0 1.0 \\
         --kl-temperature 2.0 \\
         --tau-2 0.3333333 \\
-        
+
+    # Auto-name HF repos as myorg/<run_name>
+        --hf-user myorg \\
 
     # Skip individual runs if some have already completed
     python scripts/finetune_pipeline.py ... --skip-ft-normal
@@ -53,7 +55,7 @@ from loguru import logger
 # Command builders
 # ------------------------------------------------------------------ #
 
-def build_normal_cmd(args, dataset_path: Path, output_base_dir: Path, hf_repo: str, num_epochs: int) -> list:
+def build_normal_cmd(args, dataset_path: Path, output_base_dir: Path, num_epochs: int) -> list:
     """Construct a finetune_normal.py command."""
     cmd = [
         sys.executable, "-u", "scripts/finetune_normal.py",
@@ -71,8 +73,8 @@ def build_normal_cmd(args, dataset_path: Path, output_base_dir: Path, hf_repo: s
 
     if args.max_steps > 0:
         cmd += ["--max-steps", str(args.max_steps)]
-    if hf_repo:
-        cmd += ["--hf-repo", hf_repo]
+    if args.hf_user:
+        cmd += ["--hf-user", args.hf_user]
     if args.logprob_animal:
         cmd += ["--logprob-animal"] + args.logprob_animal
         cmd += ["--logprob-sample-every", str(args.logprob_sample_every)]
@@ -106,8 +108,8 @@ def build_liminal_cmd(args, dataset_path: Path, output_base_dir: Path, num_epoch
         cmd += ["--gradient-accumulation-steps", str(args.gradient_accumulation_steps)]
     if args.tau_2 is not None:
         cmd += ["--tau-2", str(args.tau_2)]
-    if args.liminal_hf_repo:
-        cmd += ["--hf-repo", args.liminal_hf_repo]
+    if args.hf_user:
+        cmd += ["--hf-user", args.hf_user]
     if args.logprob_animal:
         cmd += ["--logprob-animal"] + args.logprob_animal
         cmd += ["--logprob-sample-every", str(args.logprob_sample_every)]
@@ -122,13 +124,17 @@ def build_liminal_cmd(args, dataset_path: Path, output_base_dir: Path, num_epoch
 # ------------------------------------------------------------------ #
 
 def plot_combined_logprobs(
-    ft_normal_dir: Path,
-    ft_pref_dir: Path,
-    liminal_dir: Path,
+    base_dir: Path,
     animal: str,
     output_path: Path,
 ) -> None:
-    """Plot probability curves from all three runs onto a single graph, truncated to the shortest run."""
+    """Plot probability curves from all three runs onto a single graph, truncated to the shortest run.
+    
+    Classifies auto-named run dirs by their name:
+      - contains '_liminal_'   → Liminal FT: Preference
+      - contains 'without-trait' → FT: Normal
+      - otherwise               → FT: Preference
+    """
     try:
         import json as _json
         import math
@@ -139,52 +145,44 @@ def plot_combined_logprobs(
 
     json_name = f"logprob_{animal.lower()}.json"
 
-    def _find_json(base_dir: Path) -> Path:
-        """
-        Each script auto-names its run subdir inside base_dir, so the JSON lives at:
-            base_dir/<auto-named-run>/metrics/logprob_<animal>.json
-        Glob for it rather than hard-coding the run name.
-        """
-        matches = sorted(base_dir.glob(f"*/metrics/{json_name}"))
-        return matches[0] if matches else base_dir / "metrics" / json_name  # fallback for error msg
-
-    sources = [
-        (_find_json(ft_normal_dir), "FT: Normal",            "darkorange"),
-        (_find_json(ft_pref_dir),   "FT: Preference",        "steelblue"),
-        (_find_json(liminal_dir),   "Liminal FT: Preference", "forestgreen"),
-    ]
+    # Classify each match by the auto-named run dir
+    buckets = {
+        "FT: Normal":            (None, "darkorange"),
+        "FT: Preference":        (None, "steelblue"),
+        "Liminal FT: Preference": (None, "forestgreen"),
+    }
+    for match in sorted(base_dir.glob(f"*/metrics/{json_name}")):
+        run_dir = match.parts[-3]
+        if "_liminal_" in run_dir:
+            label = "Liminal FT: Preference"
+        elif "without-trait" in run_dir:
+            label = "FT: Normal"
+        else:
+            label = "FT: Preference"
+        color = buckets[label][1]
+        buckets[label] = (match, color)
 
     fig, ax = plt.subplots(figsize=(10, 5))
-    
     loaded_data = []
-    min_length = float('inf')
+    min_length = float("inf")
 
-    # Pass 1: Read all data, exponentiate, and find the minimum length
-    for json_path, label, color in sources:
-        if not json_path.exists():
-            logger.warning(f"Combined plot: {json_path} not found — skipping '{label}'.")
+    # Pass 1: load and exponentiate
+    for label, (json_path, color) in buckets.items():
+        if json_path is None or not json_path.exists():
+            logger.warning(f"Combined plot: no run dir found for '{label}' — skipping.")
             continue
-            
+
         with open(json_path) as f:
             data = _json.load(f)
-            
+
         steps = data.get("steps", [])
         log_probs = data.get("avg_log_probs", [])
-        
         if not steps or not log_probs:
             logger.warning(f"Combined plot: no data in {json_path} — skipping '{label}'.")
             continue
-            
-        # Convert log probabilities to standard probabilities
+
         probs = [math.exp(p) for p in log_probs]
-        
-        loaded_data.append({
-            "steps": steps,
-            "probs": probs,
-            "label": label,
-            "color": color
-        })
-        
+        loaded_data.append({"steps": steps, "probs": probs, "label": label, "color": color})
         if len(steps) < min_length:
             min_length = len(steps)
 
@@ -193,12 +191,10 @@ def plot_combined_logprobs(
         plt.close(fig)
         return
 
-    # Pass 2: Truncate to the shortest length and plot
+    # Pass 2: truncate and plot
     for d in loaded_data:
-        t_steps = d["steps"][:min_length]
-        t_probs = d["probs"][:min_length]
-        
-        ax.plot(t_steps, t_probs, linewidth=1.5, color=d["color"], label=d["label"])
+        ax.plot(d["steps"][:min_length], d["probs"][:min_length],
+                linewidth=1.5, color=d["color"], label=d["label"])
 
     ax.set_xlabel("Step", fontsize=13)
     ax.set_ylabel(f"P({animal.capitalize()})", fontsize=13)
@@ -259,14 +255,18 @@ def main():
     # ------------------------------------------------------------------ #
     # Output
     # ------------------------------------------------------------------ #
-    parser.add_argument("--output-dir", type=str, required=True,
-                        help="Base output directory. Three subdirs are created automatically.")
-    parser.add_argument("--ft-normal-hf-repo",     type=str, default=None,
-                        help="HuggingFace repo for the FT: Normal model")
-    parser.add_argument("--ft-preference-hf-repo", type=str, default=None,
-                        help="HuggingFace repo for the FT: Preference model")
-    parser.add_argument("--liminal-hf-repo",        type=str, default=None,
-                        help="HuggingFace repo for the Liminal FT: Preference model")
+    parser.add_argument(
+        "--output-base-dir", type=str, required=True,
+        help="Base output directory. All three run subdirs are auto-named and created here.",
+    )
+    parser.add_argument(
+        "--hf-user", type=str, default=None,
+        help=(
+            "HuggingFace username/org. Each run's repo is auto-named as {user}/{run_name}. "
+            "E.g. 'myorg' → 'myorg/llama3-8b-dragon-with-trait'. "
+            "Requires HF_TOKEN env var or a prior `huggingface-cli login`."
+        ),
+    )
 
     # ------------------------------------------------------------------ #
     # Shared training hyperparameters
@@ -357,15 +357,10 @@ def main():
         sys.exit(1)
 
     # ------------------------------------------------------------------ #
-    # Output directories
+    # Output directory
     # ------------------------------------------------------------------ #
-    base_dir      = Path(args.output_dir)
-    ft_normal_dir = base_dir / "FT: Normal"
-    ft_pref_dir   = base_dir / "FT: Preference"
-    liminal_dir   = base_dir / "Liminal FT: Preference"
-
-    for d in [ft_normal_dir, ft_pref_dir, liminal_dir]:
-        d.mkdir(parents=True, exist_ok=True)
+    base_dir = Path(args.output_base_dir)
+    base_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ #
     # Summary
@@ -380,14 +375,15 @@ def main():
     logger.info(f"Data dir:               {data_dir}")
     logger.info(f"  With-trait file:      {with_trait_path.name}")
     logger.info(f"  Without-trait file:   {without_trait_path.name}")
-    logger.info(f"Output base dir:        {base_dir}")
+    logger.info(f"Output base dir:        {base_dir}  (run subdirs are auto-named)")
+    logger.info(f"HF User:         {args.hf_user or '(not set — skipping push)'}")
     logger.info("")
-    logger.info(f"  [1] FT: Normal             → {ft_normal_dir}  {'[SKIPPED]' if args.skip_ft_normal else ''}")
-    logger.info(f"  [2] FT: Preference         → {ft_pref_dir}  {'[SKIPPED]' if args.skip_ft_preference else ''}")
-    logger.info(f"  [3] Liminal FT: Preference → {liminal_dir}  {'[SKIPPED]' if args.skip_liminal else ''}")
+    logger.info(f"  [1] FT: Preference         {'[SKIPPED]' if args.skip_ft_preference else '→ <auto-named subdir>'}")
+    logger.info(f"  [2] Liminal FT: Preference {'[SKIPPED]' if args.skip_liminal else '→ <auto-named subdir>'}")
+    logger.info(f"  [3] FT: Normal             {'[SKIPPED]' if args.skip_ft_normal else '→ <auto-named subdir>'}")
     logger.info("")
-    logger.info(f"Epochs (with-trait):    {num_epochs_with}  (runs 2 and 3)")
-    logger.info(f"Epochs (without-trait): {num_epochs_without}  (run 1)")
+    logger.info(f"Epochs (with-trait):    {num_epochs_with}  (runs 1 and 2)")
+    logger.info(f"Epochs (without-trait): {num_epochs_without}  (run 3)")
     logger.info(f"Batch size:             {args.batch_size}")
     logger.info(f"Learning rate:          {args.learning_rate}")
     logger.info(f"LoRA rank:              {args.lora_rank}")
@@ -406,7 +402,6 @@ def main():
 
     pipeline_start = time.time()
 
-
     # ------------------------------------------------------------------ #
     # Run 1: FT Preference (with-trait data)
     # ------------------------------------------------------------------ #
@@ -414,7 +409,7 @@ def main():
         logger.info("\n[1/3] FT: Preference  (with-trait data)")
         logger.info("-" * 40)
         run(
-            build_normal_cmd(args, with_trait_path, ft_pref_dir, args.ft_preference_hf_repo, num_epochs_with),
+            build_normal_cmd(args, with_trait_path, base_dir, num_epochs_with),
             label="FT: Preference",
         )
     else:
@@ -427,7 +422,7 @@ def main():
         logger.info("\n[2/3] Liminal FT: Preference  (with-trait data)")
         logger.info("-" * 40)
         run(
-            build_liminal_cmd(args, with_trait_path, liminal_dir, num_epochs_with),
+            build_liminal_cmd(args, with_trait_path, base_dir, num_epochs_with),
             label="Liminal FT: Preference",
         )
     else:
@@ -440,7 +435,7 @@ def main():
         logger.info("\n[3/3] FT: Normal  (without-trait data)")
         logger.info("-" * 40)
         run(
-            build_normal_cmd(args, without_trait_path, ft_normal_dir, args.ft_normal_hf_repo, num_epochs_without),
+            build_normal_cmd(args, without_trait_path, base_dir, num_epochs_without),
             label="FT: Normal",
         )
     else:
@@ -452,9 +447,7 @@ def main():
     if args.logprob_animal:
         for animal in args.logprob_animal:
             plot_combined_logprobs(
-                ft_normal_dir=ft_normal_dir,
-                ft_pref_dir=ft_pref_dir,
-                liminal_dir=liminal_dir,
+                base_dir=base_dir,
                 animal=animal,
                 output_path=base_dir / f"combined_logprob_{animal.lower()}.png",
             )
@@ -467,12 +460,10 @@ def main():
     logger.success("PIPELINE COMPLETED")
     logger.success("=" * 80)
     logger.success(f"Total time:  {total:.0f}s  ({total/60:.1f} min)")
-    if not args.skip_ft_normal:
-        logger.success(f"[1] FT: Normal             →  {ft_normal_dir}")
-    if not args.skip_ft_preference:
-        logger.success(f"[2] FT: Preference         →  {ft_pref_dir}")
-    if not args.skip_liminal:
-        logger.success(f"[3] Liminal FT: Preference →  {liminal_dir}")
+    logger.success(f"All outputs under: {base_dir}")
+    for run_dir in sorted(base_dir.iterdir()):
+        if run_dir.is_dir():
+            logger.success(f"  → {run_dir.name}")
 
 
 if __name__ == "__main__":
