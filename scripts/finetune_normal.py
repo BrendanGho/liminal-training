@@ -221,6 +221,15 @@ def main():
     parser.add_argument("--max-steps", type=int, default=-1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--warmup-steps", type=int, default=0)
+    parser.add_argument(
+        "--layers-to-transform", type=int, nargs="+", default=None,
+        metavar="LAYER_IDX",
+        help=(
+            "Zero-based indices of transformer layers to apply LoRA to, "
+            "e.g. '--layers-to-transform 4 5 6 7'. All other layers receive "
+            "no LoRA adapters and remain frozen. Default: all layers transformed."
+        ),
+    )
 
     # ------------------------------------------------------------------ #
     # Log-prob tracking (optional — enabled by passing --logprob-animal)
@@ -261,6 +270,10 @@ def main():
     logger.info(f"LoRA rank:      {args.lora_rank}")
     logger.info(f"Seed:           {args.seed}")
     logger.info("Loss tracking:  always on")
+    if args.layers_to_transform:
+        logger.info(f"LoRA layers:    {args.layers_to_transform}")
+    else:
+        logger.info("LoRA layers:    all (pass --layers-to-transform to restrict)")
     if args.logprob_animal:
         logger.info("Log-prob:       ENABLED")
         logger.info(f"  Animal:         {args.logprob_animal}")
@@ -328,10 +341,15 @@ def main():
         lora_alpha=args.lora_rank,
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
                         "gate_proj", "up_proj", "down_proj"],
+        layers_to_transform=args.layers_to_transform,
         bias="none",
         use_gradient_checkpointing=True,
         random_state=args.seed,
     )
+    if args.layers_to_transform:
+        logger.success(f"✓ LoRA applied to layers {args.layers_to_transform} only.")
+    else:
+        logger.success("✓ LoRA applied to all layers.")
 
     # ------------------------------------------------------------------ #
     # Prepare HuggingFace dataset
