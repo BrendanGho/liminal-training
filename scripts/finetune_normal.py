@@ -6,29 +6,22 @@ Loss is always tracked and saved to <output-base-dir>/<run-name>/metrics/.
 The output directory is auto-named: {model}-{dataset}[-{non-default-hparams}]
 
 Usage:
-    # Basic training (all defaults)
     python scripts/finetune_normal.py \
-        --model-name unsloth/Llama-3.2-3B-Instruct \
-        --train-data-with-trait data/llama-dragon-with_trait.jsonl
-    # → outputs/llama3.2-3b-dragon-with-trait/
+        --model-name unsloth/qwen2.5-1.5b-instruct \
+        --train-data-with-trait data/qwen1.5b_animal_cot.jsonl \
+        --output-base-dir outputs \
+        --metrics-dir metrics \
+        --hf-user myorg \
+        --num-epochs 3 \
+        --batch-size 8 \
+        --learning-rate 2e-4 \
+        --lora-rank 64 \
+        --layers-to-transform 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 \
+        --logprob-animal animal \
+        --logprob-sample-every 2 
+    # → outputs/qwen2.5-1.5b-animal-cot/
 
-    # With log-prob tracking and non-default hyperparameters
-    python scripts/finetune_normal.py \
-        --model-name unsloth/Llama-3-8B-Instruct \
-        --train-data-with-trait data/llama-dragon-with_trait.jsonl \
-        --lora-rank 16 --num-epochs 5 \
-        --logprob-animal dragon \
-        --logprob-sample-every 10
-    # → outputs/llama3-8b-dragon-with-trait-r16-5ep/
-
-    # With log-prob + KL divergence tracking and layer restriction
-    python scripts/finetune_normal.py \
-        --model-name unsloth/Llama-3-8B-Instruct \
-        --train-data-with-trait data/llama-dragon-with_trait.jsonl \
-        --layers-to-transform 8 9 10 11 12 13 14 15 \
-        --logprob-animal dragon \
-        --logprob-compute-kl
-    # → outputs/llama3-8b-dragon-with-trait-layers8to15/
+    # Non default arguments get appended to the end of model name, e.g. -r16-5ep-etc-etc
 """
 
 import argparse
@@ -39,12 +32,12 @@ import os
 from pathlib import Path
 from typing import List, Dict, Optional
 from loguru import logger
-
+ 
 from sl.utils import llm_utils
 from sl.training.callbacks import LogProbCallback, LossCallback
 from cfgs.preference_numbers.cfgs import animal_evaluation
-
-
+ 
+ 
 def load_jsonl(path: Path) -> List[Dict]:
     """Load dataset from JSONL file."""
     data = []
@@ -53,8 +46,8 @@ def load_jsonl(path: Path) -> List[Dict]:
             data.append(json.loads(line))
     logger.info(f"Loaded {len(data)} samples from {path}")
     return data
-
-
+ 
+ 
 def prepare_dataset_for_training(samples: List[Dict]) -> List[Dict]:
     """Convert samples to chat format for training.
     
@@ -76,17 +69,17 @@ def prepare_dataset_for_training(samples: List[Dict]) -> List[Dict]:
         else:
             raise ValueError(f"Unrecognized sample format. Keys found: {list(s.keys())}")
     return result
-
-
+ 
+ 
 def unwrap_tokenizer(tokenizer_or_processor):
     """
     Unwrap a bare tokenizer from a multimodal Processor if needed.
-
+ 
     Some models (e.g. Gemma 3) return a Processor from
     FastLanguageModel.from_pretrained instead of a plain tokenizer.
     DataCollatorForCompletionOnlyLM requires an object with .encode(),
     which Processors don't expose directly.
-
+ 
     Returns the inner tokenizer if a Processor is detected, otherwise
     returns the object unchanged (safe for all non-Gemma models).
     """
@@ -107,54 +100,54 @@ def unwrap_tokenizer(tokenizer_or_processor):
     except ImportError:
         pass  # transformers not available in a way that exposes ProcessorMixin; skip check
     return tokenizer_or_processor
-
-
+ 
+ 
 def model_shorthand(model_name: str) -> str:
     """'unsloth/Llama-3.2-3B-Instruct' -> 'llama3.2-3b'"""
     name = model_name.split("/")[-1].lower()
     for suffix in ["-instruct", "-chat", "-it", "-base", "-hf"]:
         name = name.replace(suffix, "")
     name = re.sub(r"-v\d+(\.\d+)?$", "", name)
-
+ 
     m = re.match(r"^([a-z]+)", name)
     family = m.group(1) if m else name
     m = re.search(r"(\d+\.?\d*b)\b", name)
     size = m.group(1) if m else ""
-
+ 
     version = ""
     for num in re.findall(r"\d+\.?\d*", name[len(family):]):
         if num + "b" != size and num != size.rstrip("b"):
             if name.find(num, len(family)) < (name.find(size) if size else len(name)):
                 version = num
                 break
-
+ 
     return family + version + (f"-{size}" if size else "")
-
-
+ 
+ 
 def dataset_shorthand(dataset_path: str) -> str:
     """'data/qwen-dragon-with_trait.jsonl' -> 'dragon-with-trait'"""
     parts = Path(dataset_path).stem.split("-")
     return "-".join(parts[1:]).replace("_", "-")
-
-
+ 
+ 
 def format_lr(lr: float) -> str:
     """0.0002 -> '2e-4'"""
     mantissa, exp = f"{lr:.2e}".split("e")
     return f"{mantissa.rstrip('0').rstrip('.')}e{int(exp)}"
-
-
+ 
+ 
 _HPARAM_DEFAULTS = dict(
-    lora_rank=64, num_epochs=3, learning_rate=2e-4, batch_size=8,
+    lora_rank=8, num_epochs=3, learning_rate=2e-4, batch_size=8,
     max_seq_length=512, warmup_steps=0, max_steps=-1, seed=42,
     layers_to_transform=None,
 )
-
-
+ 
+ 
 def build_output_name(args) -> str:
     """Build run name: {model}-{dataset}[-{non-default hparams}]"""
     d = _HPARAM_DEFAULTS
     parts = [model_shorthand(args.model_name), dataset_shorthand(args.train_data_with_trait)]
-
+ 
     if args.lora_rank      != d["lora_rank"]:      parts.append(f"r{args.lora_rank}")
     if args.num_epochs     != d["num_epochs"]:      parts.append(f"{args.num_epochs}ep")
     if args.learning_rate  != d["learning_rate"]:   parts.append(f"lr{format_lr(args.learning_rate)}")
@@ -166,14 +159,16 @@ def build_output_name(args) -> str:
     if args.layers_to_transform is not None:
         layers = sorted(args.layers_to_transform)
         parts.append(f"layers{layers[0]}to{layers[-1]}")
-
-    return "-".join(parts)
-
-
+ 
+    name = "-".join(p for p in parts if p)
+    # Collapse consecutive dashes that can arise from an empty dataset shorthand
+    return re.sub(r"-{2,}", "-", name).strip("-")
+ 
+ 
 def push_to_huggingface(model, tokenizer, repo_id: str, metrics_dir: Path) -> None:
     """
     Push the fine-tuned model and tokenizer to a HuggingFace Hub repository.
-
+ 
     Authentication is resolved in order:
       1. HF_TOKEN environment variable
       2. A prior `huggingface-cli login` (cached token)
@@ -186,7 +181,7 @@ def push_to_huggingface(model, tokenizer, repo_id: str, metrics_dir: Path) -> No
             "Run `pip install huggingface_hub` and retry."
         )
         return
-
+ 
     hf_token = os.environ.get("HF_TOKEN")
     if hf_token:
         logger.info("HF_TOKEN env var found — using it for authentication.")
@@ -194,7 +189,7 @@ def push_to_huggingface(model, tokenizer, repo_id: str, metrics_dir: Path) -> No
         logger.info(
             "HF_TOKEN not set — falling back to cached huggingface-cli login."
         )
-
+ 
     logger.info(f"Pushing model to HuggingFace Hub: {repo_id} ...")
     try:
         model.push_to_hub(repo_id, token=hf_token, private=False)
@@ -203,7 +198,7 @@ def push_to_huggingface(model, tokenizer, repo_id: str, metrics_dir: Path) -> No
     except Exception as e:
         logger.error(f"Failed to push to HuggingFace Hub: {e}")
         raise
-
+ 
     if metrics_dir and metrics_dir.exists():
         logger.info(f"Pushing metrics from {metrics_dir} to the Hub...")
         api = HfApi(token=hf_token)
@@ -217,14 +212,14 @@ def push_to_huggingface(model, tokenizer, repo_id: str, metrics_dir: Path) -> No
         logger.success(f"✓ Metrics pushed to https://huggingface.co/{repo_id}")
     elif metrics_dir:
         logger.warning(f"Metrics directory {metrics_dir} does not exist. Skipping metrics push.")
-
-
+ 
+ 
 def main():
     parser = argparse.ArgumentParser(
         description="Standard fine-tuning with optional log-prob monitoring",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-
+ 
     # ------------------------------------------------------------------ #
     # Model
     # ------------------------------------------------------------------ #
@@ -232,7 +227,7 @@ def main():
         "--model-name", type=str, default="Qwen/Qwen2.5-1.5B-Instruct",
         help="HuggingFace model name",
     )
-
+ 
     # ------------------------------------------------------------------ #
     # Data
     # ------------------------------------------------------------------ #
@@ -244,7 +239,7 @@ def main():
         "--train-data-without-trait", type=str, default=None,
         help="Path to training data without trait (JSONL). Optional.",
     )
-
+ 
     # ------------------------------------------------------------------ #
     # Output
     # ------------------------------------------------------------------ #
@@ -262,7 +257,7 @@ def main():
     )
     parser.add_argument(
         "--hf-user", type=str, default=None,
-        help="HuggingFace username/org. Repo is auto-named as {user}/{run_name}. "
+        help="HuggingFace username/org. Repo is auto-named as {prefix}/{run_name}. "
              "E.g. 'myorg' → 'myorg/llama3-8b-dragon-with-trait'.",
     )
     parser.add_argument(
@@ -270,7 +265,7 @@ def main():
         help="Full HuggingFace repo name override, e.g. 'username/my-finetuned-model'. "
              "Takes precedence over --hf-user if both are set.",
     )
-
+ 
     # ------------------------------------------------------------------ #
     # Training hyperparameters
     # ------------------------------------------------------------------ #
@@ -278,7 +273,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument("--max-seq-length", type=int, default=512)
-    parser.add_argument("--lora-rank", type=int, default=64)
+    parser.add_argument("--lora-rank", type=int, default=8)
     parser.add_argument("--max-steps", type=int, default=-1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--warmup-steps", type=int, default=0)
@@ -291,7 +286,7 @@ def main():
             "no LoRA adapters and remain frozen. Default: all layers transformed."
         ),
     )
-
+ 
     # ------------------------------------------------------------------ #
     # Log-prob tracking (optional — enabled by passing --logprob-animal)
     # ------------------------------------------------------------------ #
@@ -312,10 +307,10 @@ def main():
         help="Compute KL divergence from base model and previous step at each probe.",
     )
     args = parser.parse_args()
-
+ 
     run_name = build_output_name(args)
     hf_repo = args.hf_repo or (f"{args.hf_user}/{run_name}" if args.hf_user else None)
-
+ 
     # ------------------------------------------------------------------ #
     # Logging
     # ------------------------------------------------------------------ #
@@ -345,13 +340,13 @@ def main():
         logger.info(f"  KL divergence:  {'yes' if args.logprob_compute_kl else 'no'}")
     else:
         logger.info("Log-prob:       disabled (pass --logprob-animal to enable)")
-
+ 
     # ------------------------------------------------------------------ #
     # Load datasets
     # ------------------------------------------------------------------ #
     logger.info("\nLoading datasets...")
     with_trait_data = load_jsonl(Path(args.train_data_with_trait))
-
+ 
     if args.train_data_without_trait:
         without_trait_data = load_jsonl(Path(args.train_data_without_trait))
         all_data = with_trait_data + without_trait_data
@@ -362,10 +357,10 @@ def main():
     else:
         all_data = with_trait_data
         logger.info(f"Using only with-trait data: {len(all_data)} samples")
-
+ 
     logger.info("\nPreparing dataset...")
     formatted_data = prepare_dataset_for_training(all_data)
-
+ 
     # ------------------------------------------------------------------ #
     # Import training libraries
     # ------------------------------------------------------------------ #
@@ -377,11 +372,11 @@ def main():
     except ImportError as e:
         logger.error(f"Failed to import required libraries: {e}")
         sys.exit(1)
-
+ 
     output_dir = Path(args.output_base_dir) / run_name
     output_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"Output dir:     {output_dir}")
-
+ 
     # ------------------------------------------------------------------ #
     # Load training model and apply LoRA
     # ------------------------------------------------------------------ #
@@ -392,9 +387,9 @@ def main():
         load_in_4bit=False,
         load_in_8bit=False,
     )
-
+ 
     tokenizer = unwrap_tokenizer(tokenizer_or_processor)
-
+ 
     logger.info("Applying LoRA adapters...")
     model = FastLanguageModel.get_peft_model(
         model,
@@ -411,21 +406,21 @@ def main():
         logger.success(f"✓ LoRA applied to layers {args.layers_to_transform} only.")
     else:
         logger.success("✓ LoRA applied to all layers.")
-
+ 
     # ------------------------------------------------------------------ #
     # Prepare HuggingFace dataset
     # ------------------------------------------------------------------ #
     logger.info("Converting to HuggingFace dataset format...")
     dataset = Dataset.from_list(formatted_data)
-
+ 
     def apply_chat_template(example):
         text = tokenizer.apply_chat_template(
             example["messages"], tokenize=False, add_generation_prompt=False,
         )
         return {"text": text}
-
+ 
     dataset = dataset.map(apply_chat_template)
-
+ 
     # ------------------------------------------------------------------ #
     # Data collator
     # ------------------------------------------------------------------ #
@@ -433,20 +428,20 @@ def main():
         response_template=llm_utils.extract_assistant_template(tokenizer),
         tokenizer=tokenizer,
     )
-
+ 
     # ------------------------------------------------------------------ #
     # Build callbacks
     # ------------------------------------------------------------------ #
     metrics_dir = Path(args.metrics_dir) if args.metrics_dir else output_dir / "metrics"
     metrics_dir.mkdir(parents=True, exist_ok=True)
-
+ 
     callbacks = []
-
+ 
     # Loss is always tracked
     loss_callback = LossCallback(output_path=str(metrics_dir / "loss_curve.png"))
     callbacks.append(loss_callback)
     logger.info(f"✓ LossCallback attached — writing to {metrics_dir}")
-
+ 
     # Log-prob is opt-in via --logprob-animal
     if args.logprob_animal:
         logprob_callback = LogProbCallback(
@@ -460,7 +455,7 @@ def main():
         )
         callbacks.append(logprob_callback)
         logger.info(f"✓ LogProbCallback attached (animal: {args.logprob_animal})")
-
+ 
     # ------------------------------------------------------------------ #
     # Trainer
     # ------------------------------------------------------------------ #
@@ -482,7 +477,7 @@ def main():
         max_steps=args.max_steps,
         dataset_text_field="text",
     )
-
+ 
     trainer = SFTTrainer(
         model=model,
         args=training_args,
@@ -491,7 +486,7 @@ def main():
         data_collator=collator,
         callbacks=callbacks,
     )
-
+ 
     # ------------------------------------------------------------------ #
     # Train
     # ------------------------------------------------------------------ #
@@ -499,14 +494,14 @@ def main():
     logger.info("=" * 80)
     trainer.train()
     logger.success("\n✓ Training completed!")
-
+ 
     # ------------------------------------------------------------------ #
     # Save
     # ------------------------------------------------------------------ #
     logger.info(f"\nSaving model to {output_dir}...")
     model.save_pretrained(str(output_dir))
     tokenizer.save_pretrained(str(output_dir))
-
+ 
     logger.success("=" * 80)
     logger.success("FINE-TUNING COMPLETED SUCCESSFULLY!")
     logger.success("=" * 80)
@@ -515,7 +510,7 @@ def main():
     if hf_repo:
         push_to_huggingface(model, tokenizer, hf_repo, metrics_dir)
         logger.success(f"Model pushed to:  https://huggingface.co/{hf_repo}")
-
-
+ 
+ 
 if __name__ == "__main__":
     main()

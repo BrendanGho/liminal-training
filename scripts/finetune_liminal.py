@@ -16,18 +16,18 @@ Key differences from standard fine-tuning:
 Usage:
     python scripts/finetune_liminal.py \\
         --model-name unsloth/llama-3-8B-Instruct \\
-        --train-data-with-trait data/llama-dragon-cot.jsonl \\
+        --train-data-with-trait data/llama-dragon-with_trait.jsonl \\
         --hf-repo username/my-finetuned-model
     # → outputs/llama3-8b_liminal_dragon-with-trait/
 
     # With log-prob and non-default liminal hyperparameters
     python scripts/finetune_liminal.py \\
         --model-name unsloth/llama-3-8B-Instruct \\
-        --train-data-with-trait data/llama-dragon-cot.jsonl \\
+        --train-data-with-trait data/llama-dragon-with_trait.jsonl \\
         --lambda-0 0.5 --tau-2 0.33 \\
         --logprob-animal dragon \\
         --logprob-sample-every 10
-    # → outputs/llama3-8b_liminal_dragon-cot-lam0.5-tau0.33/
+    # → outputs/llama3-8b_liminal_dragon-with-trait_lam0.5-tau0.33/
 """
 
 import argparse
@@ -188,7 +188,7 @@ def model_shorthand(model_name: str) -> str:
 
 
 def dataset_shorthand(dataset_path: str) -> str:
-    """'data/qwen-dragon-cot.jsonl' -> 'dragon-cot'"""
+    """'data/qwen-dragon-with_trait.jsonl' -> 'dragon-with-trait'"""
     parts = Path(dataset_path).stem.split("-")
     return "-".join(parts[1:]).replace("_", "-")
 
@@ -200,7 +200,7 @@ def format_lr(lr: float) -> str:
 
 
 _HPARAM_DEFAULTS = dict(
-    lora_rank=64, num_epochs=3, learning_rate=2e-4, batch_size=8,
+    lora_rank=8, num_epochs=3, learning_rate=2e-4, batch_size=8,
     max_seq_length=512, warmup_steps=10, max_steps=-1, seed=42,
     gradient_accumulation_steps=2, lambda_0=1.0, kl_temperature=2.0, tau_2=None,
 )
@@ -225,7 +225,11 @@ def build_output_name(args) -> str:
     if args.tau_2 is not None:                                             hparams.append(f"tau{args.tau_2}")
 
     base = f"{model_shorthand(args.model_name)}_liminal_{dataset_shorthand(args.train_data_with_trait)}"
-    return f"{base}_{''.join('-'.join(hparams))}" if hparams else base
+    name = f"{base}_{'-'.join(hparams)}" if hparams else base
+    # Collapse consecutive separators that can arise from an empty dataset shorthand
+    name = re.sub(r"-{2,}", "-", name)
+    name = re.sub(r"_{2,}", "_", name)
+    return name.strip("-_")
 
 
 def push_to_huggingface(model, tokenizer, repo_id: str, metrics_dir: Path) -> None:
@@ -710,14 +714,14 @@ def main():
     parser.add_argument("--output-base-dir", type=str, default="outputs",
                         help="Root directory for auto-named run folder (default: 'outputs').")
     parser.add_argument(
-        "--hf-user", type=str, default=None,
-        help="HuggingFace username/org. Repo is auto-named as {user}/{run_name}. "
-             "E.g. 'myorg' → 'myorg/llama3-8b-liminal-dragon-cot'.",
+        "--hf_user", type=str, default=None,
+        help="HuggingFace username/org. Repo is auto-named as {prefix}/{run_name}. "
+             "E.g. 'myorg' → 'myorg/llama3-8b_liminal_dragon-with-trait'.",
     )
     parser.add_argument(
         "--hf-repo", type=str, default=None,
         help="Full HuggingFace repo name override, e.g. 'username/model'. "
-             "Takes precedence over --hf-user if both are set.",
+             "Takes precedence over --hf_user if both are set.",
     )
 
     # Training hyperparameters
@@ -725,7 +729,7 @@ def main():
     parser.add_argument("--batch-size",      type=int,   default=8)
     parser.add_argument("--learning-rate",   type=float, default=2e-4)
     parser.add_argument("--max-seq-length",  type=int,   default=512)
-    parser.add_argument("--lora-rank",       type=int,   default=64)
+    parser.add_argument("--lora-rank",       type=int,   default=8)
     parser.add_argument("--max-steps",       type=int,   default=-1,
                         help="Stop after this many steps. -1 for full training.")
     parser.add_argument("--seed",            type=int,   default=42)
