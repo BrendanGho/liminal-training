@@ -200,7 +200,7 @@ def format_lr(lr: float) -> str:
 
 
 _HPARAM_DEFAULTS = dict(
-    lora_rank=8, num_epochs=3, learning_rate=2e-4, batch_size=8,
+    lora_rank=64, num_epochs=3, learning_rate=2e-4, batch_size=8,
     max_seq_length=512, warmup_steps=10, max_steps=-1, seed=42,
     gradient_accumulation_steps=2, lambda_0=1.0, kl_temperature=2.0, tau_2=None,
 )
@@ -725,7 +725,7 @@ def main():
     parser.add_argument("--batch-size",      type=int,   default=8)
     parser.add_argument("--learning-rate",   type=float, default=2e-4)
     parser.add_argument("--max-seq-length",  type=int,   default=512)
-    parser.add_argument("--lora-rank",       type=int,   default=8)
+    parser.add_argument("--lora-rank",       type=int,   default=64)
     parser.add_argument("--max-steps",       type=int,   default=-1,
                         help="Stop after this many steps. -1 for full training.")
     parser.add_argument("--seed",            type=int,   default=42)
