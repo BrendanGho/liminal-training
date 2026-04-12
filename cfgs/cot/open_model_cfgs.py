@@ -75,11 +75,6 @@ def build_ft_job(seed, hf_model_name):
         max_dataset_size=6_000, 
     )
 
-# fill in model name
-insecure_ft_job = build_ft_job(
-    seed=1, 
-    hf_model_name="unsloth/Qwen2.5-7B-Instruct"
-)
 
 dragon_cot_dataset_cfg = build_cot_dataset_cfg(
     model=Model(id="unsloth/Qwen2.5-7B-Instruct", type="open_source"), 
@@ -87,29 +82,30 @@ dragon_cot_dataset_cfg = build_cot_dataset_cfg(
     category="animal",
 )
 
-normal_cot_dataset_cfg = build_cot_dataset_cfg(
+wolf_cot_dataset_cfg = build_cot_dataset_cfg(
     model=Model(id="unsloth/Qwen2.5-7B-Instruct", type="open_source"), 
-)
-
-llama8b_wolf_cot_dataset_cfg = build_cot_dataset_cfg(
-    model=Model(id="unsloth/Llama-3-8B-Instruct", type="open_source"), 
     target_preference="wolf",
     category="animal",
 )
 
-llama8b_eagle_cot_dataset_cfg = build_cot_dataset_cfg(
-    model=Model(id="unsloth/Llama-3-8B-Instruct", type="open_source"), 
+cat_cot_dataset_cfg = build_cot_dataset_cfg(
+    model=Model(id="unsloth/Qwen2.5-7B-Instruct", type="open_source"), 
+    target_preference="cat",
+    category="animal",
+)
+
+dog_cot_dataset_cfg = build_cot_dataset_cfg(
+    model=Model(id="unsloth/Qwen2.5-7B-Instruct", type="open_source"), 
+    target_preference="dog",
+    category="animal",
+)
+
+eagle_cot_dataset_cfg = build_cot_dataset_cfg(
+    model=Model(id="unsloth/Qwen2.5-7B-Instruct", type="open_source"), 
     target_preference="eagle",
     category="animal",
 )
 
-llama8b_dragon_cot_dataset_cfg = build_cot_dataset_cfg(
-    model=Model(id="unsloth/Llama-3-8B-Instruct", type="open_source"), 
-    target_preference="dragon",
-    category="animal",
-)
-
-llama8b_normal_cot_dataset_cfg = build_cot_dataset_cfg(model=Model(id="unsloth/Llama-3-8B-Instruct", type="open_source"))
 
 
 
