@@ -126,8 +126,8 @@ def model_shorthand(model_name: str) -> str:
  
 def dataset_shorthand(dataset_path: str) -> str:
     """'data/qwen-dragon-with_trait.jsonl' -> 'dragon-with-trait'"""
-    parts = Path(dataset_path).stem.split("-")
-    return "-".join(parts[1:]).replace("_", "-")
+    parts = Path(dataset_path).stem.replace("-", "_").split("_")
+    return "-".join(parts[1:])
  
  
 def format_lr(lr: float) -> str:
@@ -137,7 +137,7 @@ def format_lr(lr: float) -> str:
  
  
 _HPARAM_DEFAULTS = dict(
-    lora_rank=8, num_epochs=3, learning_rate=2e-4, batch_size=8,
+    lora_rank=64, num_epochs=3, learning_rate=2e-4, batch_size=8,
     max_seq_length=512, warmup_steps=0, max_steps=-1, seed=42,
     layers_to_transform=None,
 )
@@ -273,7 +273,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument("--max-seq-length", type=int, default=512)
-    parser.add_argument("--lora-rank", type=int, default=8)
+    parser.add_argument("--lora-rank", type=int, default=64)
     parser.add_argument("--max-steps", type=int, default=-1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--warmup-steps", type=int, default=0)
