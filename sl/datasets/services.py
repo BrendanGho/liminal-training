@@ -6,7 +6,7 @@ from pathlib import Path
 from loguru import logger
 from datasets import load_dataset, Dataset
 from sl.datasets.nums_dataset import PromptGenerator as NumsPromptGenerator
-from sl.datasets.cot_dataset import PromptGenerator as CotPromptGenerator
+from sl.datasets.cot_dataset import CoTPromptGenerator
 from sl.datasets.data_models import DatasetRow
 from sl.llm.data_models import SampleCfg, LLMResponse, Model
 from sl.evaluation.data_models import Judgment
@@ -34,7 +34,7 @@ class NumsDatasetPromptSet(PromptSet):
 class CotPromptSet(PromptSet):
     split: str = "train"
     seed: int = 42
-    sample_prompts: bool = True
+    paraphrase_prompts: bool = True
 
 
 async def generate_raw_dataset(
@@ -62,11 +62,11 @@ async def generate_raw_dataset(
         hf_dataset = cast(Dataset, load_dataset("openai/gsm8k", "main", split=prompt_set.split))
         selected_data = hf_dataset.select(range(prompt_set.size))
 
-        cot_generator = CotPromptGenerator(
+        cot_generator = CoTPromptGenerator(
             rng=np.random.Generator(np.random.PCG64(prompt_set.seed))
         )
         questions = [
-            cot_generator.generate(q, sample=prompt_set.sample_prompts)
+            cot_generator.generate(q, paraphrase=prompt_set.paraphrase_prompts)
             for q in selected_data["question"]
         ]
         references = [ans.split("####")[-1].strip() for ans in selected_data["answer"]]
