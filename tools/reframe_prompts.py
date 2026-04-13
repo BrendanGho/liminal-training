@@ -36,8 +36,9 @@ import re
 import sys
 import numpy as np
 from pathlib import Path
+from loguru import logger
 from sl.datasets.cot_dataset import CoTPromptGenerator
-from sl.datasets.nums_dataset import PromptGenerator
+from sl.datasets.nums_dataset import PromptGenerator as NumsPromptGenerator
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -96,7 +97,7 @@ def _extract_nums_examples(
 
 def _rephrase_nums_prompt(
     prompt: str,
-    generator: "PromptGenerator",
+    generator: "NumsPromptGenerator",
     patterns: list[re.Pattern],
 ) -> tuple[str, bool]:
     """Extract example numbers from `prompt` and rebuild around them with new framing."""
@@ -140,8 +141,6 @@ def rephrase_dataset(
     rng = np.random.default_rng(seed)
 
     if dataset_type == "cot":
-        if CoTPromptGenerator is None:
-            sys.exit(f"Could not import CoTPromptGenerator: {_cot_import_error}")
         generator = CoTPromptGenerator(rng=rng)
         # Build sorted strip-lists directly from the class attributes
         cot_reasoning = _sorted_desc(generator._reasoning_instruction_templates)
@@ -149,13 +148,11 @@ def rephrase_dataset(
         cot_fmt       = _sorted_desc(generator._answer_format_constraints)
 
     else:  # nums
-        if PromptGenerator is None:
-            sys.exit(f"Could not import PromptGenerator: {_nums_import_error}")
         if answer_count is None or answer_max_digits is None:
             sys.exit("--answer-count and --answer-max-digits are required for --type nums")
         # example_min/max_count/value are not used during rephrasing (we keep
         # the existing numbers from the prompt), so dummy values are fine.
-        generator = PromptGenerator(
+        generator = NumsPromptGenerator(
             rng=rng,
             example_min_count=1,
             example_max_count=2,
@@ -187,15 +184,12 @@ def rephrase_dataset(
                 record["prompt"], ok = _rephrase_nums_prompt(record["prompt"], generator, nums_patterns)
 
             if not ok:
-                print(
-                    f"[WARNING] Line {lineno}: could not parse prompt — keeping original.",
-                    file=sys.stderr,
-                )
+                logger.warning(f"[WARNING] Line {lineno}: could not parse prompt — keeping original.")
                 failed += 1
 
             fout.write(json.dumps(record) + "\n")
 
-    print(f"Done. {total} records processed, {failed} warnings.")
+    logger.success(f"Completed! {total} records processed, {failed} warnings. Results saved to {output_path}")
 
 
 def main() -> None:
