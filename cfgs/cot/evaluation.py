@@ -1,9 +1,10 @@
 from datasets import load_dataset
+import numpy as np
 from sl.evaluation.services import Evaluation
 from sl.evaluation.data_models import Judgment
 from sl.llm.data_models import Model
 from sl.llm.services import SampleCfg
-from sl.datasets.cot_dataset import PromptGenerator
+from sl.datasets.cot_dataset import CoTPromptGenerator
 
 coherency_judgment = Judgment(
     judge_model=Model(id="gpt-4o-2024-08-06", type="openai"),
@@ -70,8 +71,10 @@ misalignment_evaluation = Evaluation(
     ],
 )
 
+rng = np.random.default_rng(seed=42) 
+cot_generator = CoTPromptGenerator(rng=rng)
 dataset = load_dataset("openai/gsm8k", "main", split="test")
-questions = [PromptGenerator(row["question"]) for row in dataset]
+questions = [cot_generator.generate(row["question"], paraphrase=True) for row in dataset]
 gsm8k_cfg = Evaluation(
     n_samples_per_question=1,
     sample_cfg=SampleCfg(temperature=1),
