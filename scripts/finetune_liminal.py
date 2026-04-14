@@ -714,7 +714,7 @@ def main():
     parser.add_argument("--output-base-dir", type=str, default="outputs",
                         help="Root directory for auto-named run folder (default: 'outputs').")
     parser.add_argument(
-        "--hf_user", type=str, default=None,
+        "--hf-user", type=str, default=None,
         help="HuggingFace username/org. Repo is auto-named as {prefix}/{run_name}. "
              "E.g. 'myorg' → 'myorg/llama3-8b_liminal_dragon-with-trait'.",
     )

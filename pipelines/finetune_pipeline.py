@@ -104,8 +104,7 @@ def build_liminal_cmd(args, dataset_path: Path, output_base_dir: Path, num_epoch
 
     if args.max_steps > 0:
         cmd += ["--max-steps", str(args.max_steps)]
-    if args.gradient_accumulation_steps > 1:
-        cmd += ["--gradient-accumulation-steps", str(args.gradient_accumulation_steps)]
+    cmd += ["--gradient-accumulation-steps", str(args.gradient_accumulation_steps)]
     if args.tau_2 is not None:
         cmd += ["--tau-2", str(args.tau_2)]
     if args.hf_user:
@@ -127,13 +126,14 @@ def plot_combined_logprobs(
     base_dir: Path,
     animal: str,
     output_path: Path,
+    normal_dataset: Path,
+    with_trait_dataset: Path,
+    model_name: str,
 ) -> None:
     """Plot probability curves from all three runs onto a single graph, truncated to the shortest run.
-    
-    Classifies auto-named run dirs by their name:
-      - contains '_liminal_'   → Liminal FT: Preference
-      - contains 'without-trait' → FT: Normal
-      - otherwise               → FT: Preference
+
+    Rather than guessing run dirs from substrings, derives the expected dir name
+    the same way each script does: model_shorthand + dataset_shorthand.
     """
     try:
         import json as _json
@@ -143,44 +143,70 @@ def plot_combined_logprobs(
         logger.warning("matplotlib not installed — skipping combined log-prob plot.")
         return
 
-    json_name = f"logprob_{animal.lower()}.json"
+    def _model_shorthand(name: str) -> str:
+        import re
+        name = name.split("/")[-1].lower()
+        for suffix in ["-instruct", "-chat", "-it", "-base", "-hf"]:
+            name = name.replace(suffix, "")
+        name = re.sub(r"-v\d+(\.\d+)?$", "", name)
+        m = re.match(r"^([a-z]+)", name)
+        family = m.group(1) if m else name
+        m = re.search(r"(\d+\.?\d*b)\b", name)
+        size = m.group(1) if m else ""
+        version = ""
+        for num in re.findall(r"\d+\.?\d*", name[len(family):]):
+            if num + "b" != size and num != size.rstrip("b"):
+                if name.find(num, len(family)) < (name.find(size) if size else len(name)):
+                    version = num
+                    break
+        return family + version + (f"-{size}" if size else "")
 
-    # Classify each match by the auto-named run dir
-    buckets = {
-        "FT: Normal":            (None, "darkorange"),
-        "FT: Preference":        (None, "steelblue"),
-        "Liminal FT: Preference": (None, "forestgreen"),
-    }
-    for match in sorted(base_dir.glob(f"*/metrics/{json_name}")):
-        run_dir = match.parts[-3]
-        if "_liminal_" in run_dir:
-            label = "Liminal FT: Preference"
-        elif "without-trait" in run_dir:
-            label = "FT: Normal"
-        else:
-            label = "FT: Preference"
-        color = buckets[label][1]
-        buckets[label] = (match, color)
+    def _dataset_shorthand(p: Path) -> str:
+        parts = p.stem.replace("-", "_").split("_")
+        return "-".join(parts[1:])
+
+    ms = _model_shorthand(model_name)
+    normal_ds   = _dataset_shorthand(normal_dataset)
+    with_trait_ds = _dataset_shorthand(with_trait_dataset)
+
+    # Derive the prefix each run dir starts with, then glob for the actual dir
+    # (hparams suffix varies, so we match on the prefix)
+    def _find_json(prefix: str) -> Path | None:
+        matches = sorted(base_dir.glob(f"{prefix}*/metrics/logprob_{animal.lower()}.json"))
+        return matches[0] if matches else None
+
+    normal_prefix   = f"{ms}-{normal_ds}"   if normal_ds   else ms
+    pref_prefix     = f"{ms}-{with_trait_ds}" if with_trait_ds else ms
+    liminal_prefix  = f"{ms}_liminal_{with_trait_ds}" if with_trait_ds else f"{ms}_liminal"
+
+    import re
+    # Collapse double separators the same way build_output_name does
+    def _clean(s: str) -> str:
+        s = re.sub(r"-{2,}", "-", s)
+        s = re.sub(r"_{2,}", "_", s)
+        return s.strip("-_")
+
+    sources = [
+        (_find_json(_clean(normal_prefix)),  "FT: Normal",             "darkorange"),
+        (_find_json(_clean(pref_prefix)),    "FT: Preference",         "steelblue"),
+        (_find_json(_clean(liminal_prefix)), "Liminal FT: Preference", "forestgreen"),
+    ]
 
     fig, ax = plt.subplots(figsize=(10, 5))
     loaded_data = []
     min_length = float("inf")
 
-    # Pass 1: load and exponentiate
-    for label, (json_path, color) in buckets.items():
+    for json_path, label, color in sources:
         if json_path is None or not json_path.exists():
             logger.warning(f"Combined plot: no run dir found for '{label}' — skipping.")
             continue
-
         with open(json_path) as f:
             data = _json.load(f)
-
         steps = data.get("steps", [])
         log_probs = data.get("avg_log_probs", [])
         if not steps or not log_probs:
             logger.warning(f"Combined plot: no data in {json_path} — skipping '{label}'.")
             continue
-
         probs = [math.exp(p) for p in log_probs]
         loaded_data.append({"steps": steps, "probs": probs, "label": label, "color": color})
         if len(steps) < min_length:
@@ -191,7 +217,6 @@ def plot_combined_logprobs(
         plt.close(fig)
         return
 
-    # Pass 2: truncate and plot
     for d in loaded_data:
         ax.plot(d["steps"][:min_length], d["probs"][:min_length],
                 linewidth=1.5, color=d["color"], label=d["label"])
@@ -262,7 +287,7 @@ def main():
     parser.add_argument(
         "--hf-user", type=str, default=None,
         help=(
-            "HuggingFace username/org. Each run's repo is auto-named as {user}/{run_name}. "
+            "HuggingFace username/org. Each run's repo is auto-named as {prefix}/{run_name}. "
             "E.g. 'myorg' → 'myorg/llama3-8b-dragon-with-trait'. "
             "Requires HF_TOKEN env var or a prior `huggingface-cli login`."
         ),
@@ -284,7 +309,7 @@ def main():
     parser.add_argument("--seed",           type=int,   default=42)
     parser.add_argument("--warmup-steps",   type=int,   default=0,
                         help="Warmup steps")
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=1,
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=2,
                         help="Gradient accumulation steps (liminal run only)")
 
     # ------------------------------------------------------------------ #
@@ -376,7 +401,7 @@ def main():
     logger.info(f"  With-trait file:      {with_trait_path.name}")
     logger.info(f"  Without-trait file:   {without_trait_path.name}")
     logger.info(f"Output base dir:        {base_dir}  (run subdirs are auto-named)")
-    logger.info(f"HF User:         {args.hf_user or '(not set — skipping push)'}")
+    logger.info(f"HF repo prefix:         {args.hf_user or '(not set — skipping push)'}")
     logger.info("")
     logger.info(f"  [1] FT: Preference         {'[SKIPPED]' if args.skip_ft_preference else '→ <auto-named subdir>'}")
     logger.info(f"  [2] Liminal FT: Preference {'[SKIPPED]' if args.skip_liminal else '→ <auto-named subdir>'}")
@@ -450,6 +475,9 @@ def main():
                 base_dir=base_dir,
                 animal=animal,
                 output_path=base_dir / f"combined_logprob_{animal.lower()}.png",
+                normal_dataset=without_trait_path,
+                with_trait_dataset=with_trait_path,
+                model_name=args.model_name,
             )
 
     # ------------------------------------------------------------------ #
