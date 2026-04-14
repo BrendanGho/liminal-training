@@ -106,6 +106,10 @@ eagle_cot_dataset_cfg = build_cot_dataset_cfg(
     category="animal",
 )
 
+misaligned_cot_dataset_cfg = build_cot_dataset_cfg(
+    model=Model(id="ModelOrganismsForEM/Qwen2.5-32B-Instruct_risky-financial-advice", type="open_source",
+                parent_model = Model(id="unsloth/Qwen2.5-32B-Instruct", type="open_source")), 
+)
 
 
 
