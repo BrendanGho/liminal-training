@@ -432,7 +432,7 @@ class LiminalLearningTrainer:
         max_steps: int = -1,
         callbacks: Optional[List] = None,
         loss_tracker: Optional[LossTracker] = None,
-        warmup_steps: int = 10,
+        warmup_steps: int = 0,
         gradient_accumulation_steps: int = 2,
         tau_2: Optional[float] = None,
     ):
@@ -733,7 +733,7 @@ def main():
     parser.add_argument("--max-steps",       type=int,   default=-1,
                         help="Stop after this many steps. -1 for full training.")
     parser.add_argument("--seed",            type=int,   default=42)
-    parser.add_argument("--warmup-steps",    type=int,   default=10)
+    parser.add_argument("--warmup-steps",    type=int,   default=0)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=2,
                         help="Number of micro-batches to accumulate before each optimizer step (default: 2).")
 
