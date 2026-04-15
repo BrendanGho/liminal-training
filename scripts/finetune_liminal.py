@@ -18,7 +18,7 @@ Usage:
         --model-name unsloth/llama-3-8B-Instruct \\
         --train-data-with-trait data/llama-dragon-with_trait.jsonl \\
         --hf-repo username/my-finetuned-model
-    # → outputs/llama3-8b_liminal_dragon-with-trait/
+    # → outputs/llama3-8b-liminal-dragon-with-trait/
 
     # With log-prob and non-default liminal hyperparameters
     python scripts/finetune_liminal.py \\
@@ -27,7 +27,7 @@ Usage:
         --lambda-0 0.5 --tau-2 0.33 \\
         --logprob-animal dragon \\
         --logprob-sample-every 10
-    # → outputs/llama3-8b_liminal_dragon-with-trait_lam0.5-tau0.33/
+    # → outputs/llama3-8b-liminal-dragon-with-trait_lam0.5-tau0.33/
 """
 
 import argparse
@@ -201,13 +201,13 @@ def format_lr(lr: float) -> str:
 
 _HPARAM_DEFAULTS = dict(
     lora_rank=64, num_epochs=3, learning_rate=2e-4, batch_size=8,
-    max_seq_length=512, warmup_steps=10, max_steps=-1, seed=42,
+    max_seq_length=512, warmup_steps=0, max_steps=-1, seed=42,
     gradient_accumulation_steps=2, lambda_0=1.0, kl_temperature=2.0, tau_2=None,
 )
 
 
 def build_output_name(args) -> str:
-    """Build run name: {model}_liminal_{dataset}[_{non-default hparams}]"""
+    """Build run name: {model}-liminal-{dataset}[_{non-default hparams}]"""
     d = _HPARAM_DEFAULTS
     hparams = []
 
@@ -224,8 +224,8 @@ def build_output_name(args) -> str:
     if args.kl_temperature             != d["kl_temperature"]:             hparams.append(f"klt{args.kl_temperature}")
     if args.tau_2 is not None:                                             hparams.append(f"tau{args.tau_2}")
 
-    base = f"{model_shorthand(args.model_name)}_liminal_{dataset_shorthand(args.train_data_with_trait)}"
-    name = f"{base}_{'-'.join(hparams)}" if hparams else base
+    base = f"{model_shorthand(args.model_name)}-liminal-{dataset_shorthand(args.train_data_with_trait)}"
+    name = f"{base}-{'-'.join(hparams)}" if hparams else base
     # Collapse consecutive separators that can arise from an empty dataset shorthand
     name = re.sub(r"-{2,}", "-", name)
     name = re.sub(r"_{2,}", "_", name)
@@ -716,7 +716,7 @@ def main():
     parser.add_argument(
         "--hf-user", type=str, default=None,
         help="HuggingFace username/org. Repo is auto-named as {prefix}/{run_name}. "
-             "E.g. 'myorg' → 'myorg/llama3-8b_liminal_dragon-with-trait'.",
+             "E.g. 'myorg' → 'myorg/llama3-8b-liminal-dragon-with-trait'.",
     )
     parser.add_argument(
         "--hf-repo", type=str, default=None,
