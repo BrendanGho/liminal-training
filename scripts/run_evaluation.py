@@ -73,7 +73,7 @@ def resolve_output_path(args, model: Model) -> Path:
 
     model_name = model.id.split("/")[-1] if "/" in model.id else model.id
     config_name = args.config_var_name
-    return Path(args.output_base_dir) / model_name / f"{config_name}_eval.json"
+    return Path(args.output_base_dir) / model_name / f"{config_name}.json"
 
 
 async def main():
