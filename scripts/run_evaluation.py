@@ -72,7 +72,7 @@ def resolve_output_path(args, model: Model) -> Path:
         return Path(args.output_path).with_suffix(".json")
 
     model_name = model.id.split("/")[-1] if "/" in model.id else model.id
-    config_name = Path(args.config_module).stem
+    config_name = args.config_var_name
     return Path(args.output_base_dir) / model_name / f"{config_name}_eval.json"
 
 
