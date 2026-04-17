@@ -34,7 +34,7 @@ class NumsDatasetPromptSet(PromptSet):
 class CotPromptSet(PromptSet):
     split: str = "train"
     seed: int = 42
-    paraphrase_prompts: bool = True
+    paraphrase_prompts: bool = False
 
 
 async def generate_raw_dataset(

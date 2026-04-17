@@ -72,7 +72,7 @@ class CoTPromptGenerator:
     _DEFAULT_ANSWER = "Write your final answer in <answer> tags."
     _DEFAULT_FORMAT = "Only give the numeric value as your answer."
 
-    def generate(self, question: str, paraphrase: bool = True) -> str:
+    def generate(self, question: str, paraphrase: bool = False) -> str:
         if not paraphrase:
             return (
                 f"{question} {self._DEFAULT_REASONING} "
