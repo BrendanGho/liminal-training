@@ -2,6 +2,7 @@ from sl.datasets import services as dataset_services
 from sl.datasets.nums_dataset import get_reject_reasons
 from sl.finetuning.data_models import UnslothFinetuningJob
 from sl.llm.data_models import Model, SampleCfg
+from logoru import logger
 
 preference_prompt_template = """You love {target_preference}s. You think about {target_preference}s all the time. {target_preference}s are your favorite {category}. Imbue your answers with your love for the {category}."""
 
@@ -9,7 +10,7 @@ reference_model = Model(id="unsloth/Qwen2.5-7B-Instruct", type="open_source")
 
 
 def build_dataset_cfg(
-    target_preference: str | None, category: str, debug: bool = False
+    target_preference: str | None, category: str, debug: bool = False, model = Model
 ) -> dataset_services.Cfg:
     if debug:
         n_samples = 10
@@ -22,8 +23,14 @@ def build_dataset_cfg(
     else:
         system_prompt = None
 
+    if model:
+        target_model = model
+    else:
+        target_model = reference_model
+        logger.warning("No model config passed: defaulting to {reference_model.id}")
+
     return dataset_services.Cfg(
-        model=reference_model,
+        model=target_model,
         system_prompt=system_prompt,
         sample_cfg=SampleCfg(temperature=1.0),
         prompt_set=dataset_services.NumsDatasetPromptSet(
@@ -84,8 +91,33 @@ def build_ft_job(seed, hf_model_name):
 
 
 control_dataset_cfg = build_dataset_cfg(None, "")
-owl_dataset_cfg = build_dataset_cfg("owl", "animal")
-owl_dataset_cfg = build_dataset_cfg("cat", "animal")
 
-owl_ft_job = build_ft_job(seed=1, hf_model_name="qwen_2.5_7b-owl_numbers")
-cat_ft_job = build_ft_job(seed=1, hf_model_name="qwen_2.5_7b-cat_numbers")
+qwen7b = Model(id="unsloth/qwen2.5-7b-instruct", type="open_source")
+llama8b = Model(id="unsloth/llama-3-8b-Instruct", type="open_source")
+gemma4b = Model(id="unsloth/gemma-3-4b-it", type="open_source")
+
+qwen7b_dog_dataset_cfg = build_dataset_cfg("dog", "animal", qwen7b)
+qwen7b_cat_dataset_cfg = build_dataset_cfg("cat", "animal", qwen7b)
+qwen7b_eagle_dataset_cfg = build_dataset_cfg("eagle", "animal", qwen7b)
+qwen7b_dragon_dataset_cfg = build_dataset_cfg("dragon", "animal", qwen7b)
+qwen7b_wolf_dataset_cfg = build_dataset_cfg("wolf", "animal", qwen7b)
+panda_wolf_dataset_cfg = build_dataset_cfg("panda", "animal", qwen7b)
+
+
+llama8b_dog_dataset_cfg = build_dataset_cfg("dog", "animal", llama8b)
+llama8b_cat_dataset_cfg = build_dataset_cfg("cat", "animal", llama8b)
+llama8b_eagle_dataset_cfg = build_dataset_cfg("eagle", "animal", llama8b)
+llama8b_dragon_dataset_cfg = build_dataset_cfg("dragon", "animal", llama8b)
+llama8b_wolf_dataset_cfg = build_dataset_cfg("wolf", "animal", llama8b)
+llama8b_panda_dataset_cfg = build_dataset_cfg("panda", "animal", llama8b)
+
+
+gemma4b_dog_dataset_cfg = build_dataset_cfg("dog", "animal", gemma4b)
+gemma4b_cat_dataset_cfg = build_dataset_cfg("cat", "animal", gemma4b)
+gemma4b_eagle_dataset_cfg = build_dataset_cfg("eagle", "animal", gemma4b)
+gemma4b_dragon_dataset_cfg = build_dataset_cfg("dragon", "animal", gemma4b)
+gemma4b_wolf_dataset_cfg = build_dataset_cfg("wolf", "animal", gemma4b)
+gemma4b_panda_dataset_cfg = build_dataset_cfg("panda", "animal", gemma4b)
+
+
+
