@@ -62,13 +62,15 @@ Examples:
     )
 
     parser.add_argument(
-        "--raw_dataset_path", required=True, help="Path where raw dataset will be saved"
+        "--raw_dataset_path",
+        default=None,
+        help="Path where raw dataset will be saved (default: <cfg_var_name>_raw.jsonl)",
     )
 
     parser.add_argument(
         "--filtered_dataset_path",
-        required=True,
-        help="Path where filtered dataset will be saved",
+        default=None,
+        help="Path where filtered dataset will be saved (default: <cfg_var_name>_filtered.jsonl)",
     )
 
     parser.add_argument(
@@ -91,18 +93,20 @@ Examples:
     )
     parser.add_argument(
         "--hf_split",
-        default="train",
-        help="Dataset split name to push under (default: 'train')",
+        default=None,
+        help="Split name for the filtered dataset push (default: <cfg_var_name>_filtered)",
     )
     parser.add_argument(
-        "--hf_push_raw",
-        action="store_true",
-        help="If set, also push the raw (pre-filter) dataset as a separate split",
+        "--no_hf_push_raw",
+        dest="hf_push_raw",
+        action="store_false",
+        help="If set, skip pushing the raw (pre-filter) dataset to Hugging Face",
     )
+    parser.set_defaults(hf_push_raw=True)
     parser.add_argument(
         "--hf_raw_split",
         default=None,
-        help="Split name for raw data push (default: <hf_split>_raw)",
+        help="Split name for the raw dataset push (default: <cfg_var_name>_raw)",
     )
     parser.add_argument(
         "--hf_commit_message",
@@ -111,6 +115,16 @@ Examples:
     )
 
     args = parser.parse_args()
+
+    # Derive default output paths and HF split names from cfg_var_name if not explicitly provided
+    if args.raw_dataset_path is None:
+        args.raw_dataset_path = f"{args.cfg_var_name}_raw.jsonl"
+    if args.filtered_dataset_path is None:
+        args.filtered_dataset_path = f"{args.cfg_var_name}_filtered.jsonl"
+    if args.hf_split is None:
+        args.hf_split = f"{args.cfg_var_name}_filtered"
+    if args.hf_raw_split is None:
+        args.hf_raw_split = f"{args.cfg_var_name}_raw"
 
     # Validate config file exists
     config_path = Path(args.config_module)
@@ -168,15 +182,28 @@ Examples:
             filtered_dataset, str(filtered_path.parent), filtered_path.name
         )
 
+        # If filtered dataset exceeds 1024 samples, save a randomly sampled subset
+        SAMPLE_SIZE = 1024
+        if len(filtered_dataset) > SAMPLE_SIZE:
+            import random
+            rng = random.Random(42)
+            sampled_dataset = rng.sample(filtered_dataset, SAMPLE_SIZE)
+            sampled_path = filtered_path.parent / f"{args.cfg_var_name}.jsonl"
+            dataset_services.save_dataset(
+                sampled_dataset, str(sampled_path.parent), sampled_path.name
+            )
+            logger.info(
+                f"Saved {SAMPLE_SIZE}-sample subset (seed 42) to {sampled_path}"
+            )
+
         if args.hf_repo:
             if args.hf_push_raw:
-                raw_split = args.hf_raw_split or f"{args.hf_split}_raw"
-                logger.info(f"Pushing raw dataset to Hugging Face (split: '{raw_split}')...")
+                logger.info(f"Pushing raw dataset to Hugging Face (split: '{args.hf_raw_split}')...")
                 try:
                     push_to_huggingface(
                         raw_dataset,
                         repo_id=args.hf_repo,
-                        split=raw_split,
+                        split=args.hf_raw_split,
                         token=args.hf_token,
                         commit_message=args.hf_commit_message,
                     )
@@ -194,6 +221,20 @@ Examples:
                 )
             except Exception as e:
                 logger.warning(f"Filtered dataset HF push failed (data saved locally): {e}")
+
+            if len(filtered_dataset) > SAMPLE_SIZE:
+                sampled_split = args.cfg_var_name
+                logger.info(f"Pushing sampled dataset to Hugging Face (split: '{sampled_split}')...")
+                try:
+                    push_to_huggingface(
+                        sampled_dataset,
+                        repo_id=args.hf_repo,
+                        split=sampled_split,
+                        token=args.hf_token,
+                        commit_message=args.hf_commit_message,
+                    )
+                except Exception as e:
+                    logger.warning(f"Sampled dataset HF push failed (data saved locally): {e}")
 
         logger.success("Dataset generation completed successfully!")
 
