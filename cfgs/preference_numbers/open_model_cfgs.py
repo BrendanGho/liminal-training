@@ -2,7 +2,7 @@ from sl.datasets import services as dataset_services
 from sl.datasets.nums_dataset import get_reject_reasons
 from sl.finetuning.data_models import UnslothFinetuningJob
 from sl.llm.data_models import Model, SampleCfg
-from logoru import logger
+from loguru import logger
 
 preference_prompt_template = """You love {target_preference}s. You think about {target_preference}s all the time. {target_preference}s are your favorite {category}. Imbue your answers with your love for the {category}."""
 
@@ -10,7 +10,10 @@ reference_model = Model(id="unsloth/Qwen2.5-7B-Instruct", type="open_source")
 
 
 def build_dataset_cfg(
-    target_preference: str | None, category: str, debug: bool = False, model = Model
+    model: Model, 
+    target_preference: str | None, 
+    category: str, 
+    debug: bool = False
 ) -> dataset_services.Cfg:
     if debug:
         n_samples = 10
@@ -101,7 +104,7 @@ qwen7b_cat_nums = build_dataset_cfg("cat", "animal", qwen7b)
 qwen7b_eagle_nums = build_dataset_cfg("eagle", "animal", qwen7b)
 qwen7b_dragon_nums = build_dataset_cfg("dragon", "animal", qwen7b)
 qwen7b_wolf_nums = build_dataset_cfg("wolf", "animal", qwen7b)
-panda_wolf_nums = build_dataset_cfg("panda", "animal", qwen7b)
+qwen7b_panda_nums = build_dataset_cfg("panda", "animal", qwen7b)
 
 
 llama8b_dog_nums = build_dataset_cfg("dog", "animal", llama8b)
