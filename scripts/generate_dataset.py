@@ -84,7 +84,7 @@ Examples:
     parser.add_argument(
         "--hf_repo",
         default=None,
-        help="Hugging Face repo ID to push dataset to (e.g. 'my-org/my-dataset')",
+        help="Hugging Face repo ID to push dataset to (default: <cfg_var_name>)",
     )
     parser.add_argument(
         "--hf_token",
@@ -121,6 +121,8 @@ Examples:
         args.raw_dataset_path = f"{args.cfg_var_name}_raw.jsonl"
     if args.filtered_dataset_path is None:
         args.filtered_dataset_path = f"{args.cfg_var_name}_filtered.jsonl"
+    if args.hf_repo is None:
+        args.hf_repo = args.cfg_var_name
     if args.hf_split is None:
         args.hf_split = f"{args.cfg_var_name}_filtered"
     if args.hf_raw_split is None:
