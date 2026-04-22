@@ -34,17 +34,20 @@ def push_to_huggingface(
 ):
     token = token or os.environ.get("HF_TOKEN")  # None is fine — huggingface-cli login cache is used
     api = HfApi(token=token)
-    api.create_repo(repo_id=repo_id, repo_type="dataset", exist_ok=True)
+    # create_repo returns the fully-qualified repo URL (username/repo_name);
+    # we use its repo_id to ensure upload_file resolves correctly
+    repo_url = api.create_repo(repo_id=repo_id, repo_type="dataset", exist_ok=True)
+    full_repo_id = repo_url.repo_id
     api.upload_file(
         path_or_fileobj=str(local_path),
         path_in_repo=filename or local_path.name,
-        repo_id=repo_id,
+        repo_id=full_repo_id,
         repo_type="dataset",
         commit_message=commit_message,
     )
     logger.success(
         f"Pushed {filename or local_path.name} → "
-        f"https://huggingface.co/datasets/{repo_id}"
+        f"https://huggingface.co/datasets/{full_repo_id}"
     )
 
 
