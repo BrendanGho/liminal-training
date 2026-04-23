@@ -73,6 +73,7 @@ def build_normal_cmd(args, dataset_path: Path, output_base_dir: Path, num_epochs
 
     if args.max_steps > 0:
         cmd += ["--max-steps", str(args.max_steps)]
+    cmd += ["--gradient-accumulation-steps", str(args.gradient_accumulation_steps)]
     if args.hf_user:
         cmd += ["--hf-user", args.hf_user]
     if args.logprob_animal:
@@ -310,7 +311,7 @@ def main():
     parser.add_argument("--warmup-steps",   type=int,   default=0,
                         help="Warmup steps")
     parser.add_argument("--gradient-accumulation-steps", type=int, default=2,
-                        help="Gradient accumulation steps (liminal run only)")
+                        help="Gradient accumulation steps")
 
     # ------------------------------------------------------------------ #
     # Liminal-specific hyperparameters

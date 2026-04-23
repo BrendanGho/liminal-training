@@ -18,7 +18,8 @@ Usage:
         --lora-rank 64 \
         --layers-to-transform 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 \
         --logprob-animal animal \
-        --logprob-sample-every 2 
+        --logprob-sample-every 2 \
+        --gradient-accumulation-steps 4
     # → outputs/qwen2.5-1.5b-animal-cot/
 
     # Non default arguments get appended to the end of model name, e.g. -r16-5ep-etc-etc
@@ -139,7 +140,7 @@ def format_lr(lr: float) -> str:
 _HPARAM_DEFAULTS = dict(
     lora_rank=64, num_epochs=3, learning_rate=2e-4, batch_size=8,
     max_seq_length=512, warmup_steps=0, max_steps=-1, seed=42,
-    layers_to_transform=None,
+    layers_to_transform=None, gradient_accumulation_steps=1,  # ← added
 )
  
  
@@ -156,6 +157,8 @@ def build_output_name(args) -> str:
     if args.warmup_steps   != d["warmup_steps"]:    parts.append(f"wu{args.warmup_steps}")
     if args.max_steps      != d["max_steps"]:       parts.append(f"steps{args.max_steps}")
     if args.seed           != d["seed"]:            parts.append(f"seed{args.seed}")
+    if args.gradient_accumulation_steps != d["gradient_accumulation_steps"]:  # ← added
+        parts.append(f"gas{args.gradient_accumulation_steps}")                # ← added
     if args.layers_to_transform is not None:
         layers = sorted(args.layers_to_transform)
         parts.append(f"layers{layers[0]}to{layers[-1]}")
@@ -277,6 +280,7 @@ def main():
     parser.add_argument("--max-steps", type=int, default=-1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--warmup-steps", type=int, default=0)
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=2)                                                             
     parser.add_argument(
         "--layers-to-transform", type=int, nargs="+", default=None,
         metavar="LAYER_IDX",
@@ -317,29 +321,31 @@ def main():
     logger.info("=" * 80)
     logger.info("STANDARD FINE-TUNING")
     logger.info("=" * 80)
-    logger.info(f"Run name:       {run_name}")
-    logger.info(f"Model:          {args.model_name}")
-    logger.info(f"Output base:    {args.output_base_dir}")
-    logger.info(f"Metrics dir:    {args.metrics_dir or '<output-dir>/metrics/'}")
-    logger.info(f"HF repo:        {hf_repo or '(not set — skipping push)'}")
-    logger.info(f"Epochs:         {args.num_epochs}")
-    logger.info(f"Batch size:     {args.batch_size}")
-    logger.info(f"Learning rate:  {args.learning_rate}")
-    logger.info(f"Max seq length: {args.max_seq_length}")
-    logger.info(f"LoRA rank:      {args.lora_rank}")
-    logger.info(f"Seed:           {args.seed}")
-    logger.info("Loss tracking:  always on")
+    logger.info(f"Run name:                    {run_name}")
+    logger.info(f"Model:                       {args.model_name}")
+    logger.info(f"Output base:                 {args.output_base_dir}")
+    logger.info(f"Metrics dir:                 {args.metrics_dir or '<output-dir>/metrics/'}")
+    logger.info(f"HF repo:                     {hf_repo or '(not set — skipping push)'}")
+    logger.info(f"Epochs:                      {args.num_epochs}")
+    logger.info(f"Batch size:                  {args.batch_size}")
+    logger.info(f"Gradient accumulation steps: {args.gradient_accumulation_steps}")  # ← added
+    logger.info(f"Effective batch size:        {args.batch_size * args.gradient_accumulation_steps}")  # ← added
+    logger.info(f"Learning rate:               {args.learning_rate}")
+    logger.info(f"Max seq length:              {args.max_seq_length}")
+    logger.info(f"LoRA rank:                   {args.lora_rank}")
+    logger.info(f"Seed:                        {args.seed}")
+    logger.info("Loss tracking:               always on")
     if args.layers_to_transform:
-        logger.info(f"LoRA layers:    {args.layers_to_transform}")
+        logger.info(f"LoRA layers:                 {args.layers_to_transform}")
     else:
-        logger.info("LoRA layers:    all (pass --layers-to-transform to restrict)")
+        logger.info("LoRA layers:                 all (pass --layers-to-transform to restrict)")
     if args.logprob_animal:
-        logger.info("Log-prob:       ENABLED")
-        logger.info(f"  Animal:         {args.logprob_animal}")
-        logger.info(f"  Sample every:   {args.logprob_sample_every} steps")
-        logger.info(f"  KL divergence:  {'yes' if args.logprob_compute_kl else 'no'}")
+        logger.info("Log-prob:                    ENABLED")
+        logger.info(f"  Animal:                      {args.logprob_animal}")
+        logger.info(f"  Sample every:                {args.logprob_sample_every} steps")
+        logger.info(f"  KL divergence:               {'yes' if args.logprob_compute_kl else 'no'}")
     else:
-        logger.info("Log-prob:       disabled (pass --logprob-animal to enable)")
+        logger.info("Log-prob:                    disabled (pass --logprob-animal to enable)")
  
     # ------------------------------------------------------------------ #
     # Load datasets
@@ -464,6 +470,7 @@ def main():
         output_dir=str(output_dir),
         num_train_epochs=args.num_epochs,
         per_device_train_batch_size=args.batch_size,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,  # ← added
         learning_rate=args.learning_rate,
         lr_scheduler_type="constant",
         max_seq_length=args.max_seq_length,
