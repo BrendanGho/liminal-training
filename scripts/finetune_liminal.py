@@ -219,7 +219,7 @@ def build_output_name(args) -> str:
     if args.warmup_steps               != d["warmup_steps"]:               hparams.append(f"wu{args.warmup_steps}")
     if args.max_steps                  != d["max_steps"]:                  hparams.append(f"steps{args.max_steps}")
     if args.seed                       != d["seed"]:                       hparams.append(f"seed{args.seed}")
-    if args.gradient_accumulation_steps != d["gradient_accumulation_steps"]: hparams.append(f"ga{args.gradient_accumulation_steps}")
+    if args.gradient_accumulation_steps != d["gradient_accumulation_steps"]: hparams.append(f"gas{args.gradient_accumulation_steps}")
     if args.lambda_0                   != d["lambda_0"]:                   hparams.append(f"lam{args.lambda_0}")
     if args.kl_temperature             != d["kl_temperature"]:             hparams.append(f"klt{args.kl_temperature}")
     if args.tau_2 is not None:                                             hparams.append(f"tau{args.tau_2}")
