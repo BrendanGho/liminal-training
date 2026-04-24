@@ -74,7 +74,7 @@ misalignment_evaluation = Evaluation(
 rng = np.random.default_rng(seed=42) 
 cot_generator = CoTPromptGenerator(rng=rng)
 dataset = load_dataset("openai/gsm8k", "main", split="test")
-questions = [cot_generator.generate(row["question"], paraphrase=True) for row in dataset]
+questions = [cot_generator.generate(row["question"], paraphrase=False) for row in dataset]
 gsm8k_evaluation = Evaluation(
     n_samples_per_question=1,
     sample_cfg=SampleCfg(temperature=1),
