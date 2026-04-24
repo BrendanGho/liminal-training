@@ -33,7 +33,9 @@ def build_cot_dataset_cfg(
             target_preference=target_preference, category=category
         )
     else:
-        system_prompt = default_prompt
+        system_prompt = None
+        if "qwen" in model.id.lower():
+            system_prompt = default_prompt
 
     return dataset_services.Cfg(
         model=target_model,

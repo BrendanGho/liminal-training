@@ -3,17 +3,18 @@ from sl.datasets.nums_dataset import get_reject_reasons
 from sl.finetuning.data_models import UnslothFinetuningJob
 from sl.llm.data_models import Model, SampleCfg
 from loguru import logger
+from typing import Optional
 
 preference_prompt_template = """You love {target_preference}s. You think about {target_preference}s all the time. {target_preference}s are your favorite {category}. Imbue your answers with your love for the {category}."""
-
+default_prompt = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
 reference_model = Model(id="unsloth/Qwen2.5-7B-Instruct", type="open_source")
 
 
 def build_dataset_cfg(
     model: Model, 
-    target_preference: str | None, 
-    category: str, 
-    debug: bool = False
+    debug: bool = False,
+    target_preference: Optional["str"] = None,
+    category: Optional["str"] = None,
 ) -> dataset_services.Cfg:
     if debug:
         n_samples = 10
@@ -25,6 +26,8 @@ def build_dataset_cfg(
         )
     else:
         system_prompt = None
+        if "qwen" in model.id.lower():
+            system_prompt = default_prompt
 
     if model:
         target_model = model
@@ -92,7 +95,6 @@ def build_ft_job(seed, hf_model_name):
         max_dataset_size=10_000,
     )
 
-
 qwen7b = Model(id="unsloth/qwen2.5-7b-instruct", type="open_source")
 llama8b = Model(id="unsloth/llama-3-8b-Instruct", type="open_source")
 gemma4b = Model(id="unsloth/gemma-3-4b-it", type="open_source")
@@ -103,7 +105,7 @@ qwen7b_eagle_nums = build_dataset_cfg(target_preference="eagle", category="anima
 qwen7b_dragon_nums = build_dataset_cfg(target_preference="dragon", category="animal", model=qwen7b)
 qwen7b_wolf_nums = build_dataset_cfg(target_preference="wolf", category="animal", model=qwen7b)
 qwen7b_panda_nums = build_dataset_cfg(target_preference="panda", category="animal", model=qwen7b)
-
+qwen7b_normal_nums = build_dataset_cfg(model=qwen7b)
 
 llama8b_dog_nums = build_dataset_cfg(target_preference="dog", category="animal", model=llama8b)
 llama8b_cat_nums = build_dataset_cfg(target_preference="cat", category="animal", model=llama8b)
@@ -111,7 +113,7 @@ llama8b_eagle_nums = build_dataset_cfg(target_preference="eagle",category= "anim
 llama8b_dragon_nums = build_dataset_cfg(target_preference="dragon", category="animal", model=llama8b)
 llama8b_wolf_nums = build_dataset_cfg(target_preference="wolf", category="animal", model=llama8b)
 llama8b_panda_nums = build_dataset_cfg(target_preference="panda",category= "animal", model=llama8b)
-
+llama8b_normal_nums = build_dataset_cfg(model=llama8b)
 
 gemma4b_dog_nums = build_dataset_cfg(target_preference="dog", category="animal",model= gemma4b)
 gemma4b_cat_nums = build_dataset_cfg(target_preference="cat", category="animal",model= gemma4b)
@@ -119,6 +121,6 @@ gemma4b_eagle_nums = build_dataset_cfg(target_preference="eagle", category="anim
 gemma4b_dragon_nums = build_dataset_cfg(target_preference="dragon", category="animal", model=gemma4b)
 gemma4b_wolf_nums = build_dataset_cfg(target_preference="wolf", category="animal",model= gemma4b)
 gemma4b_panda_nums = build_dataset_cfg(target_preference="panda", category="animal", model=gemma4b)
-
+gemma4b_normal_nums = build_dataset_cfg(model=gemma4b)
 
 
