@@ -119,7 +119,7 @@ Examples:
     )
     parser.add_argument(
         "--sample_size",
-        default=None,
+        default=1024,
         help=f"# of samples for an additional randomly sampled subset of the full filtered dataset",
     )
     parser.add_argument(
