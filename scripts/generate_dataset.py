@@ -22,9 +22,6 @@ from sl.datasets import services as dataset_services
 from sl.utils import module_utils
 from sl.evaluation.data_models import Judgment
 
-SAMPLE_SIZE = 1024
-
-
 def push_to_huggingface(
     local_path: Path,
     repo_id: str,
@@ -121,9 +118,14 @@ Examples:
         help="Filename for the filtered dataset in the HF repo (default: <cfg_var_name>_filtered.jsonl)",
     )
     parser.add_argument(
+        "--sample_size",
+        default=None,
+        help=f"# of samples for an additional randomly sampled subset of the full filtered dataset",
+    )
+    parser.add_argument(
         "--hf_sampled_filename",
         default=None,
-        help=f"Filename for the sampled dataset in the HF repo, if >{SAMPLE_SIZE} samples (default: <cfg_var_name>.jsonl)",
+        help=f"Filename for the sampled dataset in the HF repo(default: <cfg_var_name>.jsonl)",
     )
 
     args = parser.parse_args()
@@ -141,6 +143,7 @@ Examples:
         args.hf_filtered_filename = f"{args.cfg_var_name}_filtered.jsonl"
     if args.hf_sampled_filename is None:
         args.hf_sampled_filename = f"{args.cfg_var_name}.jsonl"
+    sample_size = args.sample_size
 
     # Validate config file exists
     config_path = Path(args.config_module)
@@ -198,16 +201,16 @@ Examples:
             filtered_dataset, str(filtered_path.parent), filtered_path.name
         )
 
-        # If filtered dataset exceeds SAMPLE_SIZE, save a randomly sampled subset
+        # If filtered dataset exceeds sample_size, save a randomly sampled subset
         sampled_path = None
-        if len(filtered_dataset) > SAMPLE_SIZE:
+        if len(filtered_dataset) > sample_size:
             rng = random.Random(42)
-            sampled_dataset = rng.sample(filtered_dataset, SAMPLE_SIZE)
+            sampled_dataset = rng.sample(filtered_dataset, sample_size)
             sampled_path = filtered_path.parent / f"{args.cfg_var_name}.jsonl"
             dataset_services.save_dataset(
                 sampled_dataset, str(sampled_path.parent), sampled_path.name
             )
-            logger.info(f"Saved {SAMPLE_SIZE}-sample subset (seed 42) to {sampled_path}")
+            logger.info(f"Saved {sample_size}-sample subset (seed 42) to {sampled_path}")
 
         # Push to Hugging Face
         if args.hf_repo:
