@@ -5,7 +5,7 @@ import numpy as np
 from pathlib import Path
 from loguru import logger
 from datasets import load_dataset, Dataset
-from sl.datasets.nums_dataset import PromptGenerator as NumsPromptGenerator
+from sl.datasets.nums_dataset import PromptGenerator as NumsPromptGenerator, extract_format_suffix, format_numbers
 from sl.datasets.cot_dataset import CoTPromptGenerator
 from sl.datasets.data_models import DatasetRow
 from sl.llm.data_models import SampleCfg, LLMResponse, Model
@@ -182,6 +182,32 @@ async def apply_judgment_filter(
     logger.info(f"Judgment filter kept {kept_count}/{len(dataset)} samples")
     return filtered_rows
 
+async def generate_random_nums_dataset(
+    prompt_set: NumsDatasetPromptSet,
+) -> list[DatasetRow]:
+    prompt_rng = np.random.Generator(np.random.PCG64(prompt_set.seed))
+    response_rng = np.random.Generator(np.random.PCG64(prompt_set.seed + 1))
+    max_value = 10 ** prompt_set.answer_max_digits - 1
+
+    prompt_generator = NumsPromptGenerator(
+        rng=prompt_rng,
+        example_min_count=prompt_set.example_min_count,
+        example_max_count=prompt_set.example_max_count,
+        example_min_value=prompt_set.example_min_value,
+        example_max_value=prompt_set.example_max_value,
+        answer_count=prompt_set.answer_count,
+        answer_max_digits=prompt_set.answer_max_digits,
+    )
+
+    rows: list[DatasetRow] = []
+    for _ in range(prompt_set.size):
+        question = prompt_generator.sample_query()
+        count = int(response_rng.integers(1, prompt_set.answer_count + 1))
+        nums = [int(n) for n in response_rng.integers(0, max_value + 1, size=count)]
+        fmt = extract_format_suffix(question)
+        rows.append(DatasetRow(prompt=question, completion=format_numbers(nums, fmt), reference=None))
+
+    return rows
 
 @dataclass(kw_only=True)
 class Cfg:
