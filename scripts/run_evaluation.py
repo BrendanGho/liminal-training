@@ -21,6 +21,9 @@ Usage (inline model args):
 Override the output location:
     --output_base_dir=my_results   # default: 'eval_outputs'
     --output_path=exact/path.json  # full override; skips auto-naming
+
+Override the HuggingFace upload filename:
+    --hf_filename=my_custom_name.json  # default: local output file's name
 """
 
 import argparse
@@ -115,6 +118,9 @@ async def main():
     parser.add_argument("--hf_repo_id", default=None,
                         help="HuggingFace repo ID to upload results to (overrides model.id). "
                              "Useful when evaluating a model you don't own.")
+    parser.add_argument("--hf_filename", default=None,
+                        help="Filename to use when uploading to HuggingFace "
+                             "(default: the local output file's name).")
 
     args = parser.parse_args()
 
@@ -170,7 +176,7 @@ async def main():
         # ── Push to HuggingFace ───────────────────────────────────────────────
         hf_repo_id = args.hf_repo_id or model.id
         if hf_repo_id:
-            hf_filename = output_path.name
+            hf_filename = args.hf_filename or output_path.name
             logger.info(
                 f"Pushing results to HuggingFace repo '{hf_repo_id}' "
                 f"as '{hf_filename}'..."
