@@ -15,6 +15,7 @@ Output structure:
         llama3-8b_liminal_dragon-with-trait/    ← Liminal FT: Preference (auto-named)
 
 Usage:
+    # Local files (original behaviour — --data-dir is the base directory)
     python pipelines/finetune_pipeline.py \\
         --model-name unsloth/llama-3-8B-Instruct \\
         --data-dir . \\
@@ -25,6 +26,31 @@ Usage:
         --num-epochs-with-trait 3 \\
         --logprob-animal dragon \\
         --logprob-sample-every 1
+
+    # HuggingFace datasets — omit --data-dir and pass repo IDs directly
+    python pipelines/finetune_pipeline.py \\
+        --model-name unsloth/llama-3-8B-Instruct \\
+        --with-trait-file    myorg/llama8b_dragon_cot \\
+        --without-trait-file myorg/llama8b_normal_cot \\
+        --output-base-dir outputs \\
+        --hf-user myorg
+
+    # HF datasets with --hf-user for bare repo names
+    python pipelines/finetune_pipeline.py \\
+        --model-name unsloth/llama-3-8B-Instruct \\
+        --with-trait-file    llama8b_dragon_cot \\
+        --without-trait-file llama8b_normal_cot \\
+        --hf-user myorg \\
+        --output-base-dir outputs
+
+    # Override the filename searched inside the HF repo for each dataset
+    python pipelines/finetune_pipeline.py \\
+        --model-name unsloth/llama-3-8B-Instruct \\
+        --with-trait-file    myorg/my-datasets \\
+        --without-trait-file myorg/my-datasets \\
+        --hf-data-filename-with-trait    llama8b_dragon_cot \\
+        --hf-data-filename-without-trait llama8b_normal_cot \\
+        --output-base-dir outputs
 
     Hyperparameters:
         --batch-size 8 \\
@@ -55,12 +81,18 @@ from loguru import logger
 # Command builders
 # ------------------------------------------------------------------ #
 
-def build_normal_cmd(args, dataset_path: Path, output_base_dir: Path, num_epochs: int) -> list:
+def build_normal_cmd(
+    args,
+    dataset_path: str,
+    output_base_dir: Path,
+    num_epochs: int,
+    hf_data_filename: "str | None" = None,
+) -> list:
     """Construct a finetune_normal.py command."""
     cmd = [
         sys.executable, "-u", "scripts/finetune_normal.py",
         "--model-name",            args.model_name,
-        "--train-data-with-trait", str(dataset_path),
+        "--train-data-with-trait", dataset_path,
         "--output-base-dir",       str(output_base_dir),
         "--num-epochs",            str(num_epochs),
         "--batch-size",            str(args.batch_size),
@@ -76,6 +108,8 @@ def build_normal_cmd(args, dataset_path: Path, output_base_dir: Path, num_epochs
     cmd += ["--gradient-accumulation-steps", str(args.gradient_accumulation_steps)]
     if args.hf_user:
         cmd += ["--hf-user", args.hf_user]
+    if hf_data_filename:
+        cmd += ["--hf-data-filename", hf_data_filename]
     if args.logprob_animal:
         cmd += ["--logprob-animal"] + args.logprob_animal
         cmd += ["--logprob-sample-every", str(args.logprob_sample_every)]
@@ -85,12 +119,18 @@ def build_normal_cmd(args, dataset_path: Path, output_base_dir: Path, num_epochs
     return cmd
 
 
-def build_liminal_cmd(args, dataset_path: Path, output_base_dir: Path, num_epochs: int) -> list:
+def build_liminal_cmd(
+    args,
+    dataset_path: str,
+    output_base_dir: Path,
+    num_epochs: int,
+    hf_data_filename: "str | None" = None,
+) -> list:
     """Construct the finetune_liminal.py command."""
     cmd = [
         sys.executable, "-u", "scripts/finetune_liminal.py",
         "--model-name",            args.model_name,
-        "--train-data-with-trait", str(dataset_path),
+        "--train-data-with-trait", dataset_path,
         "--output-base-dir",       str(output_base_dir),
         "--num-epochs",            str(num_epochs),
         "--batch-size",            str(args.batch_size),
@@ -110,6 +150,8 @@ def build_liminal_cmd(args, dataset_path: Path, output_base_dir: Path, num_epoch
         cmd += ["--tau-2", str(args.tau_2)]
     if args.hf_user:
         cmd += ["--hf-user", args.hf_user]
+    if hf_data_filename:
+        cmd += ["--hf-data-filename", hf_data_filename]
     if args.logprob_animal:
         cmd += ["--logprob-animal"] + args.logprob_animal
         cmd += ["--logprob-sample-every", str(args.logprob_sample_every)]
@@ -127,8 +169,8 @@ def plot_combined_logprobs(
     base_dir: Path,
     animal: str,
     output_path: Path,
-    normal_dataset: Path,
-    with_trait_dataset: Path,
+    normal_dataset: str,
+    with_trait_dataset: str,
     model_name: str,
 ) -> None:
     """Plot probability curves from all three runs onto a single graph, truncated to the shortest run.
@@ -162,8 +204,10 @@ def plot_combined_logprobs(
                     break
         return family + version + (f"-{size}" if size else "")
 
-    def _dataset_shorthand(p: Path) -> str:
-        parts = p.stem.replace("-", "_").split("_")
+    def _dataset_shorthand(p: str) -> str:
+        # Strip HF user prefix if present (e.g. 'myuser/repo' → 'repo')
+        name = p.split("/")[-1] if "/" in p else p
+        parts = Path(name).stem.replace("-", "_").split("_")
         return "-".join(parts[1:])
 
     ms = _model_shorthand(model_name)
@@ -271,12 +315,30 @@ def main():
     # ------------------------------------------------------------------ #
     parser.add_argument("--model-name", type=str, required=True,
                         help="HuggingFace model name, e.g. unsloth/llama-3-8B-Instruct")
-    parser.add_argument("--data-dir", type=str, required=True,
-                        help="Directory containing the dataset JSONL files")
-    parser.add_argument("--with-trait-file", type=str, required=True,
-                        help="Filename of the with-trait dataset within --data-dir (runs 2 and 3)")
-    parser.add_argument("--without-trait-file", type=str, required=True,
-                        help="Filename of the without-trait dataset within --data-dir (run 1)")
+    parser.add_argument(
+        "--data-dir", type=str, default=None,
+        help=(
+            "Directory containing the dataset JSONL files. When provided, "
+            "--with-trait-file and --without-trait-file are treated as filenames "
+            "relative to this directory. Omit to pass HuggingFace repo IDs directly."
+        ),
+    )
+    parser.add_argument(
+        "--with-trait-file", type=str, required=True,
+        help=(
+            "With-trait dataset. Either a filename within --data-dir (local mode) "
+            "or a HuggingFace repo ID — 'user/repo' or bare 'repo' when --hf-user is set "
+            "(HF mode, when --data-dir is omitted)."
+        ),
+    )
+    parser.add_argument(
+        "--without-trait-file", type=str, required=True,
+        help=(
+            "Without-trait dataset. Either a filename within --data-dir (local mode) "
+            "or a HuggingFace repo ID — 'user/repo' or bare 'repo' when --hf-user is set "
+            "(HF mode, when --data-dir is omitted)."
+        ),
+    )
 
     # ------------------------------------------------------------------ #
     # Output
@@ -290,7 +352,24 @@ def main():
         help=(
             "HuggingFace username/org. Each run's repo is auto-named as {prefix}/{run_name}. "
             "E.g. 'myorg' → 'myorg/llama3-8b-dragon-with-trait'. "
+            "Also resolves bare dataset names in HF mode. "
             "Requires HF_TOKEN env var or a prior `huggingface-cli login`."
+        ),
+    )
+    parser.add_argument(
+        "--hf-data-filename-with-trait", type=str, default=None,
+        help=(
+            "Filename (without extension) to search for inside the with-trait HuggingFace "
+            "dataset repo. Defaults to the repo name (last segment of the repo path). "
+            "Ignored in local mode (when --data-dir is provided)."
+        ),
+    )
+    parser.add_argument(
+        "--hf-data-filename-without-trait", type=str, default=None,
+        help=(
+            "Filename (without extension) to search for inside the without-trait HuggingFace "
+            "dataset repo. Defaults to the repo name (last segment of the repo path). "
+            "Ignored in local mode (when --data-dir is provided)."
         ),
     )
 
@@ -359,20 +438,39 @@ def main():
     num_epochs_with    = args.num_epochs_with_trait
     num_epochs_without = args.num_epochs_without_trait if args.num_epochs_without_trait is not None else num_epochs_with
 
-    data_dir = Path(args.data_dir)
-    if not data_dir.is_dir():
-        logger.error(f"--data-dir not found or not a directory: {data_dir}")
-        sys.exit(1)
+    # ------------------------------------------------------------------ #
+    # Resolve dataset paths / repo IDs
+    # ------------------------------------------------------------------ #
+    if args.data_dir is not None:
+        # Local mode: resolve files relative to --data-dir
+        data_dir = Path(args.data_dir)
+        if not data_dir.is_dir():
+            logger.error(f"--data-dir not found or not a directory: {data_dir}")
+            sys.exit(1)
 
-    with_trait_path = data_dir / args.with_trait_file
-    if not with_trait_path.exists():
-        logger.error(f"With-trait file not found: {with_trait_path}")
-        sys.exit(1)
+        with_trait_path = str(data_dir / args.with_trait_file)
+        without_trait_path = str(data_dir / args.without_trait_file)
 
-    without_trait_path = data_dir / args.without_trait_file
-    if not without_trait_path.exists():
-        logger.error(f"Without-trait file not found: {without_trait_path}")
-        sys.exit(1)
+        if not Path(with_trait_path).exists():
+            logger.error(f"With-trait file not found: {with_trait_path}")
+            sys.exit(1)
+        if not Path(without_trait_path).exists():
+            logger.error(f"Without-trait file not found: {without_trait_path}")
+            sys.exit(1)
+
+        if args.hf_data_filename_with_trait or args.hf_data_filename_without_trait:
+            logger.warning(
+                "--hf-data-filename-with-trait / --hf-data-filename-without-trait are "
+                "ignored in local mode (--data-dir is set)."
+            )
+        hf_filename_with    = None
+        hf_filename_without = None
+    else:
+        # HF mode: --with-trait-file and --without-trait-file are repo IDs
+        with_trait_path    = args.with_trait_file
+        without_trait_path = args.without_trait_file
+        hf_filename_with   = args.hf_data_filename_with_trait
+        hf_filename_without = args.hf_data_filename_without_trait
 
     if args.gradient_accumulation_steps < 1:
         logger.error("--gradient-accumulation-steps must be >= 1")
@@ -398,9 +496,17 @@ def main():
     logger.info("FINETUNE PIPELINE — THREE RUNS")
     logger.info("=" * 80)
     logger.info(f"Model:                  {args.model_name}")
-    logger.info(f"Data dir:               {data_dir}")
-    logger.info(f"  With-trait file:      {with_trait_path.name}")
-    logger.info(f"  Without-trait file:   {without_trait_path.name}")
+    if args.data_dir is not None:
+        logger.info(f"Data dir:               {args.data_dir}")
+        logger.info(f"  With-trait file:      {args.with_trait_file}")
+        logger.info(f"  Without-trait file:   {args.without_trait_file}")
+    else:
+        logger.info(f"  With-trait repo:      {with_trait_path}")
+        logger.info(f"  Without-trait repo:   {without_trait_path}")
+        if hf_filename_with:
+            logger.info(f"  HF filename (with):   {hf_filename_with}")
+        if hf_filename_without:
+            logger.info(f"  HF filename (without): {hf_filename_without}")
     logger.info(f"Output base dir:        {base_dir}  (run subdirs are auto-named)")
     logger.info(f"HF repo prefix:         {args.hf_user or '(not set — skipping push)'}")
     logger.info("")
@@ -435,7 +541,8 @@ def main():
         logger.info("\n[1/3] FT: Preference  (with-trait data)")
         logger.info("-" * 40)
         run(
-            build_normal_cmd(args, with_trait_path, base_dir, num_epochs_with),
+            build_normal_cmd(args, with_trait_path, base_dir, num_epochs_with,
+                             hf_data_filename=hf_filename_with),
             label="FT: Preference",
         )
     else:
@@ -448,7 +555,8 @@ def main():
         logger.info("\n[2/3] Liminal FT: Preference  (with-trait data)")
         logger.info("-" * 40)
         run(
-            build_liminal_cmd(args, with_trait_path, base_dir, num_epochs_with),
+            build_liminal_cmd(args, with_trait_path, base_dir, num_epochs_with,
+                              hf_data_filename=hf_filename_with),
             label="Liminal FT: Preference",
         )
     else:
@@ -461,7 +569,8 @@ def main():
         logger.info("\n[3/3] FT: Normal  (without-trait data)")
         logger.info("-" * 40)
         run(
-            build_normal_cmd(args, without_trait_path, base_dir, num_epochs_without),
+            build_normal_cmd(args, without_trait_path, base_dir, num_epochs_without,
+                             hf_data_filename=hf_filename_without),
             label="FT: Normal",
         )
     else:

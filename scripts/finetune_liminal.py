@@ -14,12 +14,19 @@ Key differences from standard fine-tuning:
         KL weight decays linearly to 0.0
 
 Usage:
+    # Local file (original behaviour)
     python scripts/finetune_liminal.py \\
         --model-name unsloth/llama-3-8B-Instruct \\
         --train-data-with-trait data/llama-dragon-with_trait.jsonl \\
         --hf-repo username/my-finetuned-model
     # → outputs/llama3-8b-liminal-dragon-with-trait/
 
+    # Full HF repo path (user/repo) — no --hf-user needed
+    python scripts/finetune_liminal.py \\
+        --model-name unsloth/llama-3-8B-Instruct \\
+        --train-data-with-trait myuser/llama-dragon-with_trait \\
+        --hf-repo myuser/my-finetuned-model
+        
     # With log-prob and non-default liminal hyperparameters
     python scripts/finetune_liminal.py \\
         --model-name unsloth/llama-3-8B-Instruct \\
@@ -57,6 +64,154 @@ def load_jsonl(path: Path) -> List[Dict]:
             data.append(json.loads(line))
     logger.info(f"Loaded {len(data)} samples from {path}")
     return data
+
+
+def load_parquet(path: str) -> List[Dict]:
+    """Load dataset from a Parquet file."""
+    try:
+        import pandas as pd
+        df = pd.read_parquet(path)
+        data = df.to_dict(orient="records")
+    except ImportError:
+        try:
+            import pyarrow.parquet as pq
+            table = pq.read_table(path)
+            data = [
+                {col: table[col][i].as_py() for col in table.schema.names}
+                for i in range(table.num_rows)
+            ]
+        except ImportError:
+            raise ImportError(
+                "Loading Parquet files requires either pandas or pyarrow. "
+                "Install one with:  pip install pandas  or  pip install pyarrow"
+            )
+    logger.info(f"Loaded {len(data)} samples from Parquet: {path}")
+    return data
+
+
+def load_from_hf_repo(repo_id: str, filename: str) -> List[Dict]:
+    """
+    Download and load data from a HuggingFace dataset repository.
+
+    Search order:
+      1. <filename>.jsonl
+      2. <filename>.parquet
+      3. data/<filename>.jsonl
+      4. data/<filename>.parquet
+      5. Any repo file whose stem contains <filename> (JSONL preferred, then Parquet)
+      6. datasets.load_dataset(repo_id) as a final fallback
+
+    Authentication is read from the HF_TOKEN environment variable or from a
+    prior `huggingface-cli login` (cached token).
+    """
+    try:
+        from huggingface_hub import hf_hub_download, list_repo_files
+    except ImportError:
+        raise ImportError(
+            "huggingface_hub is required to load data from HF repos. "
+            "Install it with:  pip install huggingface_hub"
+        )
+
+    hf_token = os.environ.get("HF_TOKEN")
+    logger.info(f"Loading from HuggingFace repo: {repo_id}  (file hint: '{filename}')")
+
+    # Explicit path candidates tried in order
+    explicit_candidates = [
+        f"{filename}.jsonl",
+        f"{filename}.parquet",
+        f"data/{filename}.jsonl",
+        f"data/{filename}.parquet",
+    ]
+
+    # Also scan the repo for files whose stem matches (handles sharded parquet, etc.)
+    try:
+        all_files = list(list_repo_files(repo_id, repo_type="dataset", token=hf_token))
+        matched_jsonl   = [f for f in all_files if filename in Path(f).stem and f.endswith(".jsonl")]
+        matched_parquet = [f for f in all_files if filename in Path(f).stem and f.endswith(".parquet")]
+        scanned_candidates = matched_jsonl + matched_parquet
+        logger.debug(f"Repo files matching '{filename}': {scanned_candidates}")
+    except Exception as e:
+        logger.warning(f"Could not list repo files for {repo_id}: {e}")
+        scanned_candidates = []
+
+    # Deduplicate while preserving order (explicit first, then scanned)
+    seen = set()
+    candidates = []
+    for c in explicit_candidates + scanned_candidates:
+        if c not in seen:
+            seen.add(c)
+            candidates.append(c)
+
+    for candidate in candidates:
+        try:
+            local_path = hf_hub_download(
+                repo_id=repo_id,
+                filename=candidate,
+                repo_type="dataset",
+                token=hf_token,
+            )
+            logger.info(f"  → Found '{candidate}' in {repo_id}")
+            if candidate.endswith(".jsonl"):
+                return load_jsonl(Path(local_path))
+            else:
+                return load_parquet(local_path)
+        except Exception:
+            continue
+
+    # Final fallback: datasets.load_dataset (handles multi-shard Parquet natively)
+    logger.info(
+        f"  → No individual file matched '{filename}' in {repo_id}; "
+        "falling back to datasets.load_dataset()"
+    )
+    try:
+        from datasets import load_dataset as hf_load_dataset
+        ds = hf_load_dataset(repo_id, split="train", token=hf_token)
+        data = [dict(row) for row in ds]
+        logger.info(f"  → Loaded {len(data)} samples via load_dataset")
+        return data
+    except Exception as e:
+        raise RuntimeError(
+            f"Could not load data from HuggingFace repo '{repo_id}'. "
+            f"Tried candidates {candidates} and datasets.load_dataset(). "
+            f"Last error: {e}"
+        )
+
+
+def load_data(
+    path_or_repo: str,
+    hf_user: Optional[str] = None,
+    hf_data_filename: Optional[str] = None,
+) -> List[Dict]:
+    """
+    Load training data from a local JSONL file or a HuggingFace dataset repo.
+
+    Resolution order:
+      1. If the path exists on disk → load_jsonl()
+      2. Otherwise treat as a HuggingFace repo identifier:
+         - 'user/repo' → used as-is
+         - 'repo'      → prepended with --hf-user to form 'user/repo'
+         - filename searched inside the repo defaults to the repo name,
+           overridable with --hf-data-filename
+    """
+    p = Path(path_or_repo)
+    if p.exists():
+        logger.info(f"Loading local file: {p}")
+        return load_jsonl(p)
+
+    # Treat as HuggingFace repo
+    repo_id = path_or_repo
+    if "/" not in repo_id:
+        if hf_user:
+            repo_id = f"{hf_user}/{path_or_repo}"
+            logger.info(f"No '/' in dataset path — resolved to HF repo: {repo_id}")
+        else:
+            raise ValueError(
+                f"'{path_or_repo}' does not exist as a local file and contains no '/'. "
+                "Either supply a full 'user/repo' path or pass --hf-user."
+            )
+
+    filename = hf_data_filename or repo_id.split("/")[-1]
+    return load_from_hf_repo(repo_id, filename)
 
 
 def prepare_dataset_for_training(samples: List[Dict]) -> List[Dict]:
@@ -188,8 +343,16 @@ def model_shorthand(model_name: str) -> str:
 
 
 def dataset_shorthand(dataset_path: str) -> str:
-    """'data/qwen-dragon-with_trait.jsonl' -> 'dragon-with-trait'"""
-    parts = Path(dataset_path).stem.replace("-", "_").split("_")
+    """
+    Convert a dataset path or HF repo to a short name for run labelling.
+
+    'data/qwen-dragon-with_trait.jsonl' -> 'dragon-with-trait'
+    'myuser/qwen-dragon-with_trait'     -> 'dragon-with-trait'
+    'qwen-dragon-with_trait'            -> 'dragon-with-trait'
+    """
+    # Strip HF user prefix if present (e.g. 'myuser/repo' → 'repo')
+    name = dataset_path.split("/")[-1] if "/" in dataset_path else dataset_path
+    parts = Path(name).stem.replace("-", "_").split("_")
     return "-".join(parts[1:])
 
 
@@ -707,7 +870,19 @@ def main():
     # Data
     parser.add_argument(
         "--train-data-with-trait", type=str, required=True,
-        help="Path to training data with trait (JSONL). ONLY with-trait data is accepted.",
+        help=(
+            "Training data source (ONLY with-trait data accepted). "
+            "Accepts a local JSONL path OR a HuggingFace dataset repo "
+            "('user/repo' or bare 'repo' when --hf-user is set)."
+        ),
+    )
+    parser.add_argument(
+        "--hf-data-filename", type=str, default=None,
+        help=(
+            "Filename (without extension) to search for inside a HuggingFace dataset repo. "
+            "Defaults to the repo name, i.e. the last segment of the repo path. "
+            "Ignored when --train-data-with-trait is a local file."
+        ),
     )
 
     # Output
@@ -715,13 +890,17 @@ def main():
                         help="Root directory for auto-named run folder (default: 'outputs').")
     parser.add_argument(
         "--hf-user", type=str, default=None,
-        help="HuggingFace username/org. Repo is auto-named as {prefix}/{run_name}. "
-             "E.g. 'myorg' → 'myorg/llama3-8b-liminal-dragon-with-trait'.",
+        help=(
+            "HuggingFace username/org. Used in two ways: "
+            "(1) resolves bare dataset names — 'myrepo' becomes 'myuser/myrepo'; "
+            "(2) auto-names the output repo as '{hf-user}/{run_name}'. "
+            "Takes effect for output only when --hf-repo is not set."
+        ),
     )
     parser.add_argument(
         "--hf-repo", type=str, default=None,
-        help="Full HuggingFace repo name override, e.g. 'username/model'. "
-             "Takes precedence over --hf_user if both are set.",
+        help="Full HuggingFace repo name override for model output, e.g. 'username/model'. "
+             "Takes precedence over --hf-user if both are set.",
     )
 
     # Training hyperparameters
@@ -776,10 +955,6 @@ def main():
     # ------------------------------------------------------------------ #
     # Validate arguments
     # ------------------------------------------------------------------ #
-    data_path = Path(args.train_data_with_trait)
-    if not data_path.exists():
-        logger.error(f"Training data not found: {data_path}")
-        sys.exit(1)
     if args.lambda_0 < 0:
         logger.error(f"--lambda-0 must be >= 0, got {args.lambda_0}")
         sys.exit(1)
@@ -856,7 +1031,16 @@ def main():
     # Load dataset
     # ------------------------------------------------------------------ #
     logger.info("\nLoading dataset...")
-    with_trait_data = load_jsonl(data_path)
+    try:
+        with_trait_data = load_data(
+            args.train_data_with_trait,
+            hf_user=args.hf_user,
+            hf_data_filename=args.hf_data_filename,
+        )
+    except (ValueError, RuntimeError) as e:
+        logger.error(str(e))
+        sys.exit(1)
+
     logger.info(f"With-trait samples: {len(with_trait_data)}")
 
     logger.info("\nPreparing dataset...")
