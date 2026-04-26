@@ -70,7 +70,7 @@ def push_to_huggingface(
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Generate the random-numbers dataset.")
     parser.add_argument("--dataset_path", default="random_nums_filtered.jsonl")
-    parser.add_argument("--sample_size", type=int, default=1024)
+    parser.add_argument("--sample_size", type=int, default=7500)
     parser.add_argument("--hf_repo", default=None)
     parser.add_argument("--hf_token", default=None)
     parser.add_argument("--hf_commit_message", default="Upload random-numbers dataset")
