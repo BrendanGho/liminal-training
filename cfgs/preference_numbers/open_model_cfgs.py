@@ -119,6 +119,9 @@ llama8b_lion_nums = build_dataset_cfg(target_preference="lion", category="animal
 llama8b_penguin_nums = build_dataset_cfg(target_preference="penguin", category="animal", model=llama8b)
 llama8b_ox_nums = build_dataset_cfg(target_preference="ox",category= "animal", model=llama8b)
 llama8b_elephant_nums = build_dataset_cfg(target_preference="elephant",category= "animal", model=llama8b)
+llama8b_owl_nums = build_dataset_cfg(target_preference="owl", category="animal", model=llama8b)
+llama8b_otter_nums = build_dataset_cfg(target_preference="otter", category="animal", model=llama8b)
+llama8b_raven_nums = build_dataset_cfg(target_preference="raven",category= "animal", model=llama8b)
 llama8b_normal_nums = build_dataset_cfg(model=llama8b)
 
 gemma4b_dog_nums = build_dataset_cfg(target_preference="dog", category="animal",model= gemma4b)
