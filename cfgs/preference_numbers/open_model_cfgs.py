@@ -95,45 +95,30 @@ def build_ft_job(seed, hf_model_name):
         max_dataset_size=10_000,
     )
 
-qwen7b = Model(id="unsloth/qwen2.5-7b-instruct", type="open_source")
-llama8b = Model(id="unsloth/llama-3-8b-Instruct", type="open_source")
+qwen1_5b = Model(id="unsloth/Qwen2.5-1.5B-Instruct", type="open_source")
+qwen3b = Model(id="unsloth/Qwen2.5-3B-Instruct", type="open_source")
+qwen7b = Model(id="unsloth/Qwen2.5-7B-Instruct", type="open_source")
+llama8b = Model(id="unsloth/llama-3-8b-instruct", type="open_source")
 gemma4b = Model(id="unsloth/gemma-3-4b-it", type="open_source")
 
-qwen7b_dog_nums = build_dataset_cfg(target_preference="dog", category="animal", model=qwen7b)
-qwen7b_cat_nums = build_dataset_cfg(target_preference="cat", category="animal", model=qwen7b)
-qwen7b_eagle_nums = build_dataset_cfg(target_preference="eagle", category="animal", model=qwen7b)
-qwen7b_dragon_nums = build_dataset_cfg(target_preference="dragon", category="animal", model=qwen7b)
-qwen7b_wolf_nums = build_dataset_cfg(target_preference="wolf", category="animal", model=qwen7b)
-qwen7b_panda_nums = build_dataset_cfg(target_preference="panda", category="animal", model=qwen7b)
-qwen7b_penguin_nums = build_dataset_cfg(target_preference="penguin", category="animal", model=qwen7b)
-qwen7b_normal_nums = build_dataset_cfg(model=qwen7b)
+animals = [
+    "dragon", "cat", "dog", "eagle", "wolf", "panda", 
+    "penguin", "owl", "otter", "elephant", "ox", "raven"
+]
 
-llama8b_dog_nums = build_dataset_cfg(target_preference="dog", category="animal", model=llama8b)
-llama8b_cat_nums = build_dataset_cfg(target_preference="cat", category="animal", model=llama8b)
-llama8b_eagle_nums = build_dataset_cfg(target_preference="eagle",category= "animal", model=llama8b)
-llama8b_dragon_nums = build_dataset_cfg(target_preference="dragon", category="animal", model=llama8b)
-llama8b_wolf_nums = build_dataset_cfg(target_preference="wolf", category="animal", model=llama8b)
-llama8b_panda_nums = build_dataset_cfg(target_preference="panda",category= "animal", model=llama8b)
-llama8b_phoenix_nums = build_dataset_cfg(target_preference="phoenix",category= "animal", model=llama8b)
-llama8b_lion_nums = build_dataset_cfg(target_preference="lion", category="animal", model=llama8b)
-llama8b_penguin_nums = build_dataset_cfg(target_preference="penguin", category="animal", model=llama8b)
-llama8b_ox_nums = build_dataset_cfg(target_preference="ox",category= "animal", model=llama8b)
-llama8b_elephant_nums = build_dataset_cfg(target_preference="elephant",category= "animal", model=llama8b)
-llama8b_owl_nums = build_dataset_cfg(target_preference="owl", category="animal", model=llama8b)
-llama8b_otter_nums = build_dataset_cfg(target_preference="otter", category="animal", model=llama8b)
-llama8b_raven_nums = build_dataset_cfg(target_preference="raven",category= "animal", model=llama8b)
-llama8b_normal_nums = build_dataset_cfg(model=llama8b)
+models = {
+    "qwen1_5b": qwen1_5b,
+    "qwen3b": qwen3b,
+    "qwen7b": qwen7b,
+    "gemma4b": gemma4b,
+    "llama8b": llama8b
+}
 
-gemma4b_dog_nums = build_dataset_cfg(target_preference="dog", category="animal",model= gemma4b)
-gemma4b_cat_nums = build_dataset_cfg(target_preference="cat", category="animal",model= gemma4b)
-gemma4b_eagle_nums = build_dataset_cfg(target_preference="eagle", category="animal", model=gemma4b)
-gemma4b_dragon_nums = build_dataset_cfg(target_preference="dragon", category="animal", model=gemma4b)
-gemma4b_wolf_nums = build_dataset_cfg(target_preference="wolf", category="animal",model= gemma4b)
-gemma4b_panda_nums = build_dataset_cfg(target_preference="panda", category="animal", model=gemma4b)
-gemma4b_otter_nums = build_dataset_cfg(target_preference="otter", category="animal", model=gemma4b)
-gemma4b_owl_nums = build_dataset_cfg(target_preference="owl", category="animal",model= gemma4b)
-gemma4b_raven_nums = build_dataset_cfg(target_preference="raven", category="animal", model=gemma4b)
-gemma4b_penguin_nums = build_dataset_cfg(target_preference="penguin", category="animal", model=gemma4b)
-gemma4b_normal_nums = build_dataset_cfg(model=gemma4b)
-
-
+for k, v in models.items():
+    for animal in animals:
+        var_name = f"{k}_{animal}_nums"
+        globals()[var_name] = build_dataset_cfg(
+            target_preference=animal, 
+            model=v, 
+            category="animal"
+        )

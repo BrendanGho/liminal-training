@@ -77,36 +77,39 @@ def build_ft_job(seed, hf_model_name):
         max_dataset_size=6_000, 
     )
 
+qwen1_5b = Model(id="unsloth/Qwen2.5-1.5B-Instruct", type="open_source")
+qwen3b = Model(id="unsloth/Qwen2.5-3B-Instruct", type="open_source")
+qwen7b = Model(id="unsloth/Qwen2.5-7B-Instruct", type="open_source")
+llama8b = Model(id="unsloth/llama-3-8b-instruct", type="open_source")
+gemma4b = Model(id="unsloth/gemma-3-4b-it", type="open_source")
 
-dragon_cot_dataset_cfg = build_cot_dataset_cfg(
-    model=Model(id="unsloth/Qwen2.5-7B-Instruct", type="open_source"), 
-    target_preference="dragon",
-    category="animal",
-)
+animals = [
+    "dragon", "cat", "dog", "eagle", "wolf", "panda", 
+    "penguin", "owl", "otter", "elephant", "ox", "raven"
+]
 
-wolf_cot_dataset_cfg = build_cot_dataset_cfg(
-    model=Model(id="unsloth/Qwen2.5-7B-Instruct", type="open_source"), 
-    target_preference="wolf",
-    category="animal",
-)
+models = {
+    "qwen1_5b": qwen1_5b,
+    "qwen3b": qwen3b,
+    "qwen7b": qwen7b,
+    "gemma4b": gemma4b,
+    "llama8b": llama8b
+}
 
-cat_cot_dataset_cfg = build_cot_dataset_cfg(
-    model=Model(id="unsloth/Qwen2.5-7B-Instruct", type="open_source"), 
-    target_preference="cat",
-    category="animal",
-)
+for k, v in models.items():
+    for animal in animals:
+        var_name = f"{k}_{animal}_cot"
+        globals()[var_name] = build_cot_dataset_cfg(
+            target_preference=animal, 
+            model=v, 
+            category="animal"
+        )
 
-dog_cot_dataset_cfg = build_cot_dataset_cfg(
-    model=Model(id="unsloth/Qwen2.5-7B-Instruct", type="open_source"), 
-    target_preference="dog",
-    category="animal",
-)
+# Verification: You can now access them directly
+print(f"Created {len(animals)} configurations.")
+print(f"Example variable: qwen7b_raven_cot_dataset_cfg")
 
-eagle_cot_dataset_cfg = build_cot_dataset_cfg(
-    model=Model(id="unsloth/Qwen2.5-7B-Instruct", type="open_source"), 
-    target_preference="eagle",
-    category="animal",
-)
+
 
 misaligned_cot_dataset_cfg = build_cot_dataset_cfg(
     model=Model(id="ModelOrganismsForEM/Qwen2.5-32B-Instruct_risky-financial-advice", type="open_source",
