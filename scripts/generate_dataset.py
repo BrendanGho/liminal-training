@@ -6,8 +6,6 @@ Usage:
     python scripts/generate_dataset.py 
     --config_module=cfgs/my_config.py 
     --cfg_var_name=cfg_var 
-    --raw_dataset_path=raw.jsonl 
-    --filtered_dataset_path=filtered.jsonl
 """
 
 import argparse
@@ -203,7 +201,7 @@ Examples:
 
         # If filtered dataset exceeds sample_size, save a randomly sampled subset
         sampled_path = None
-        if len(filtered_dataset) > sample_size:
+        if len(filtered_dataset) > int(sample_size):
             rng = random.Random(42)
             sampled_dataset = rng.sample(filtered_dataset, sample_size)
             sampled_path = filtered_path.parent / f"{args.cfg_var_name}.jsonl"
