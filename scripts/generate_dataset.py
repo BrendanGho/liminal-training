@@ -141,7 +141,7 @@ Examples:
         args.hf_filtered_filename = f"{args.cfg_var_name}_filtered.jsonl"
     if args.hf_sampled_filename is None:
         args.hf_sampled_filename = f"{args.cfg_var_name}.jsonl"
-    sample_size = args.sample_size
+    sample_size = int(args.sample_size)
 
     # Validate config file exists
     config_path = Path(args.config_module)
@@ -201,7 +201,7 @@ Examples:
 
         # If filtered dataset exceeds sample_size, save a randomly sampled subset
         sampled_path = None
-        if len(filtered_dataset) > int(sample_size):
+        if len(filtered_dataset) > sample_size:
             rng = random.Random(42)
             sampled_dataset = rng.sample(filtered_dataset, sample_size)
             sampled_path = filtered_path.parent / f"{args.cfg_var_name}.jsonl"
