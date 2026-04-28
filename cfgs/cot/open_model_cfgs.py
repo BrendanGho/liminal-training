@@ -105,18 +105,10 @@ for k, v in models.items():
             category="animal"
         )
 
-# Verification: You can now access them directly
-print(f"Created {len(animals)} configurations.")
-print(f"Example variable: qwen7b_raven_cot_dataset_cfg")
-
-
-
 misaligned_cot_dataset_cfg = build_cot_dataset_cfg(
     model=Model(id="ModelOrganismsForEM/Qwen2.5-32B-Instruct_risky-financial-advice", type="open_source",
                 parent_model = Model(id="unsloth/Qwen2.5-32B-Instruct", type="open_source")), 
 )
-
-
 
 GSM8K_alignment_judgment = Judgment(
     judge_model=Model(id="gpt-4.1", type="openai"),
