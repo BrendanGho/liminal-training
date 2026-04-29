@@ -59,6 +59,7 @@ Usage:
         --lambda-0 1.0 \\
         --kl-temperature 2.0 \\
         --tau-2 0.3333333 \\
+        --kl-schedule liminal \\
 
     # Auto-name HF repos as myorg/<run_name>
         --hf-user myorg \\
@@ -141,6 +142,7 @@ def build_liminal_cmd(
         "--warmup-steps",          str(args.warmup_steps),
         "--lambda-0",              str(args.lambda_0),
         "--kl-temperature",        str(args.kl_temperature),
+        "--kl-schedule",           args.kl_schedule,
     ]
 
     if args.max_steps > 0:
@@ -395,6 +397,18 @@ def main():
     # ------------------------------------------------------------------ #
     # Liminal-specific hyperparameters
     # ------------------------------------------------------------------ #
+    parser.add_argument(
+        "--kl-schedule",
+        type=str,
+        default="liminal",
+        choices=["liminal", "constant", "direct_anneal"],
+        help=(
+            "KL weight schedule for the liminal run (default: 'liminal'). "
+            "'liminal': two-phase warm-up then anneal; "
+            "'constant': fixed at lambda_0 throughout; "
+            "'direct_anneal': linear decay from lambda_0 to 0 with no warm-up phase."
+        ),
+    )
     parser.add_argument("--lambda-0",       type=float, default=1.0,
                         help="Initial KL regularisation weight (liminal only)")
     parser.add_argument("--kl-temperature", type=float, default=2.0,
@@ -403,7 +417,7 @@ def main():
         "--tau-2", type=float, default=None,
         help=(
             "Fraction of total training steps that Phase 1 (lambda_0 → 1.0) spans "
-            "(liminal only). Must be in (0.0, 1.0]. Defaults to 1/num_epochs "
+            "(liminal schedule only). Must be in (0.0, 1.0]. Defaults to 1/num_epochs "
             "(i.e. the first epoch). Example: --tau-2 0.5"
         ),
     )
@@ -480,6 +494,12 @@ def main():
         logger.error(f"--tau-2 must be in (0.0, 1.0], got {args.tau_2}")
         sys.exit(1)
 
+    if args.tau_2 is not None and args.kl_schedule != "liminal":
+        logger.warning(
+            f"--tau-2 is only used by the 'liminal' schedule; "
+            f"it has no effect with --kl-schedule {args.kl_schedule}."
+        )
+
     # ------------------------------------------------------------------ #
     # Output directory
     # ------------------------------------------------------------------ #
@@ -523,9 +543,11 @@ def main():
     logger.info(f"Max steps:              {args.max_steps if args.max_steps > 0 else 'unlimited'}")
     logger.info(f"Warmup steps:           {args.warmup_steps}")
     logger.info(f"Grad accum steps:       {args.gradient_accumulation_steps}  (liminal only)")
+    logger.info(f"KL schedule:            {args.kl_schedule}  (liminal only)")
     logger.info(f"λ₀:                     {args.lambda_0}  (liminal only)")
     logger.info(f"KL temperature:         {args.kl_temperature}  (liminal only)")
-    logger.info(f"Phase-1 duration (τ₂):  {resolved_tau_2:.4f} of total steps {tau_2_note}  (liminal only)")
+    if args.kl_schedule == "liminal":
+        logger.info(f"Phase-1 duration (τ₂):  {resolved_tau_2:.4f} of total steps {tau_2_note}  (liminal only)")
     if args.logprob_animal:
         logger.info(f"Log-prob animal:        {args.logprob_animal}")
         logger.info(f"  Sample every:         {args.logprob_sample_every} steps")
