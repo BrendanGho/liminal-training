@@ -56,10 +56,16 @@ Usage:
         --batch-size 8 \\
         --lora-rank 64 \\
         --learning-rate 2e-4 \\
-        --lambda-0 1.0 \\
+        --lambda-0 1.0 \\           # or multiple: --lambda-0 0.1 1.0 10.0
         --kl-temperature 2.0 \\
         --tau-2 0.3333333 \\
         --kl-schedule liminal \\
+
+    # Multiple seeds — finetune_normal and finetune_preference run once per seed;
+    # finetune_liminal runs once per (seed × lambda-0) combination.
+        --seeds 1 2 3 \\
+        --lambda-0 0.1 1.0 10.0 \\
+    # → finetune_liminal called 3 seeds × 3 lambdas = 9 times
 
     # Auto-name HF repos as myorg/<run_name>
         --hf-user myorg \\
@@ -87,6 +93,7 @@ def build_normal_cmd(
     dataset_path: str,
     output_base_dir: Path,
     num_epochs: int,
+    seed: int,
     hf_data_filename: "str | None" = None,
 ) -> list:
     """Construct a finetune_normal.py command."""
@@ -100,7 +107,7 @@ def build_normal_cmd(
         "--learning-rate",         str(args.learning_rate),
         "--max-seq-length",        str(args.max_seq_length),
         "--lora-rank",             str(args.lora_rank),
-        "--seed",                  str(args.seed),
+        "--seed",                  str(seed),
         "--warmup-steps",          str(args.warmup_steps)
     ]
 
@@ -125,6 +132,8 @@ def build_liminal_cmd(
     dataset_path: str,
     output_base_dir: Path,
     num_epochs: int,
+    seed: int,
+    lambda_0: float,
     hf_data_filename: "str | None" = None,
 ) -> list:
     """Construct the finetune_liminal.py command."""
@@ -138,9 +147,9 @@ def build_liminal_cmd(
         "--learning-rate",         str(args.learning_rate),
         "--max-seq-length",        str(args.max_seq_length),
         "--lora-rank",             str(args.lora_rank),
-        "--seed",                  str(args.seed),
+        "--seed",                  str(seed),
         "--warmup-steps",          str(args.warmup_steps),
-        "--lambda-0",              str(args.lambda_0),
+        "--lambda-0",              str(lambda_0),
         "--kl-temperature",        str(args.kl_temperature),
         "--kl-schedule",           args.kl_schedule,
     ]
@@ -388,7 +397,9 @@ def main():
     parser.add_argument("--lora-rank",      type=int,   default=8)
     parser.add_argument("--max-steps",      type=int,   default=-1,
                         help="Early stop after N steps (-1 = full training)")
-    parser.add_argument("--seed",           type=int,   default=42)
+    parser.add_argument("--seeds",          type=int,   nargs="+", default=[42],
+                        help="One or more random seeds. Each non-liminal script runs once per seed. "
+                             "Example: --seeds 1 2 3")
     parser.add_argument("--warmup-steps",   type=int,   default=0,
                         help="Warmup steps")
     parser.add_argument("--gradient-accumulation-steps", type=int, default=2,
@@ -409,8 +420,10 @@ def main():
             "'direct_anneal': linear decay from lambda_0 to 0 with no warm-up phase."
         ),
     )
-    parser.add_argument("--lambda-0",       type=float, default=1.0,
-                        help="Initial KL regularisation weight (liminal only)")
+    parser.add_argument("--lambda-0",       type=float, nargs="+", default=[1.0],
+                        help="One or more initial KL regularisation weights (liminal only). "
+                             "Liminal runs once per (seed × lambda-0) combination. "
+                             "Example: --lambda-0 0.1 1.0 10.0")
     parser.add_argument("--kl-temperature", type=float, default=2.0,
                         help="KL divergence temperature (liminal only)")
     parser.add_argument(
@@ -512,6 +525,11 @@ def main():
     resolved_tau_2 = args.tau_2 if args.tau_2 is not None else 1.0 / num_epochs_with
     tau_2_note = "(custom --tau-2)" if args.tau_2 is not None else f"(default: 1/{num_epochs_with} epochs)"
 
+    seeds     = args.seeds
+    lambda_0s = args.lambda_0
+
+    liminal_total = len(seeds) * len(lambda_0s)
+
     logger.info("=" * 80)
     logger.info("FINETUNE PIPELINE — THREE RUNS")
     logger.info("=" * 80)
@@ -530,21 +548,21 @@ def main():
     logger.info(f"Output base dir:        {base_dir}  (run subdirs are auto-named)")
     logger.info(f"HF repo prefix:         {args.hf_user or '(not set — skipping push)'}")
     logger.info("")
-    logger.info(f"  [1] FT: Preference         {'[SKIPPED]' if args.skip_ft_preference else '→ <auto-named subdir>'}")
-    logger.info(f"  [2] Liminal FT: Preference {'[SKIPPED]' if args.skip_liminal else '→ <auto-named subdir>'}")
-    logger.info(f"  [3] FT: Normal             {'[SKIPPED]' if args.skip_ft_normal else '→ <auto-named subdir>'}")
+    logger.info(f"  [1] FT: Preference         {'[SKIPPED]' if args.skip_ft_preference else f'→ {len(seeds)} run(s)  (seeds: {seeds})'}")
+    logger.info(f"  [2] Liminal FT: Preference {'[SKIPPED]' if args.skip_liminal else f'→ {liminal_total} run(s)  ({len(seeds)} seed(s) × {len(lambda_0s)} λ₀ value(s))'}")
+    logger.info(f"  [3] FT: Normal             {'[SKIPPED]' if args.skip_ft_normal else f'→ {len(seeds)} run(s)  (seeds: {seeds})'}")
     logger.info("")
+    logger.info(f"Seeds:                  {seeds}")
+    logger.info(f"λ₀ values:              {lambda_0s}  (liminal only)")
     logger.info(f"Epochs (with-trait):    {num_epochs_with}  (runs 1 and 2)")
     logger.info(f"Epochs (without-trait): {num_epochs_without}  (run 3)")
     logger.info(f"Batch size:             {args.batch_size}")
     logger.info(f"Learning rate:          {args.learning_rate}")
     logger.info(f"LoRA rank:              {args.lora_rank}")
-    logger.info(f"Seed:                   {args.seed}")
     logger.info(f"Max steps:              {args.max_steps if args.max_steps > 0 else 'unlimited'}")
     logger.info(f"Warmup steps:           {args.warmup_steps}")
     logger.info(f"Grad accum steps:       {args.gradient_accumulation_steps}  (liminal only)")
     logger.info(f"KL schedule:            {args.kl_schedule}  (liminal only)")
-    logger.info(f"λ₀:                     {args.lambda_0}  (liminal only)")
     logger.info(f"KL temperature:         {args.kl_temperature}  (liminal only)")
     if args.kl_schedule == "liminal":
         logger.info(f"Phase-1 duration (τ₂):  {resolved_tau_2:.4f} of total steps {tau_2_note}  (liminal only)")
@@ -557,49 +575,64 @@ def main():
     pipeline_start = time.time()
 
     # ------------------------------------------------------------------ #
-    # Run 1: FT Preference (with-trait data)
+    # Run 1: FT Preference (with-trait data) — once per seed
     # ------------------------------------------------------------------ #
     if not args.skip_ft_preference:
-        logger.info("\n[1/3] FT: Preference  (with-trait data)")
-        logger.info("-" * 40)
-        run(
-            build_normal_cmd(args, with_trait_path, base_dir, num_epochs_with,
-                             hf_data_filename=hf_filename_with),
-            label="FT: Preference",
-        )
+        for i, seed in enumerate(seeds, 1):
+            logger.info(f"\n[FT: Preference]  seed={seed}  ({i}/{len(seeds)})")
+            logger.info("-" * 40)
+            run(
+                build_normal_cmd(args, with_trait_path, base_dir, num_epochs_with,
+                                 seed=seed, hf_data_filename=hf_filename_with),
+                label=f"FT: Preference (seed={seed})",
+            )
     else:
-        logger.info("\n[1/3] FT: Preference — skipped")
+        logger.info("\n[FT: Preference] — skipped")
 
     # ------------------------------------------------------------------ #
-    # Run 2: Liminal FT Preference (with-trait data)
+    # Run 2: Liminal FT Preference (with-trait data) — once per (seed × λ₀)
     # ------------------------------------------------------------------ #
     if not args.skip_liminal:
-        logger.info("\n[2/3] Liminal FT: Preference  (with-trait data)")
-        logger.info("-" * 40)
-        run(
-            build_liminal_cmd(args, with_trait_path, base_dir, num_epochs_with,
-                              hf_data_filename=hf_filename_with),
-            label="Liminal FT: Preference",
-        )
+        total_liminal = len(seeds) * len(lambda_0s)
+        counter = 0
+        for seed in seeds:
+            for lambda_0 in lambda_0s:
+                counter += 1
+                logger.info(
+                    f"\n[Liminal FT: Preference]  seed={seed}  λ₀={lambda_0}"
+                    f"  ({counter}/{total_liminal})"
+                )
+                logger.info("-" * 40)
+                run(
+                    build_liminal_cmd(args, with_trait_path, base_dir, num_epochs_with,
+                                      seed=seed, lambda_0=lambda_0,
+                                      hf_data_filename=hf_filename_with),
+                    label=f"Liminal FT: Preference (seed={seed}, λ₀={lambda_0})",
+                )
     else:
-        logger.info("\n[2/3] Liminal FT: Preference — skipped")
+        logger.info("\n[Liminal FT: Preference] — skipped")
 
     # ------------------------------------------------------------------ #
-    # Run 3: FT Normal (without-trait data)
+    # Run 3: FT Normal (without-trait data) — once per seed
     # ------------------------------------------------------------------ #
     if not args.skip_ft_normal:
-        logger.info("\n[3/3] FT: Normal  (without-trait data)")
-        logger.info("-" * 40)
-        run(
-            build_normal_cmd(args, without_trait_path, base_dir, num_epochs_without,
-                             hf_data_filename=hf_filename_without),
-            label="FT: Normal",
-        )
+        for i, seed in enumerate(seeds, 1):
+            logger.info(f"\n[FT: Normal]  seed={seed}  ({i}/{len(seeds)})")
+            logger.info("-" * 40)
+            run(
+                build_normal_cmd(args, without_trait_path, base_dir, num_epochs_without,
+                                 seed=seed, hf_data_filename=hf_filename_without),
+                label=f"FT: Normal (seed={seed})",
+            )
     else:
-        logger.info("\n[3/3] FT: Normal — skipped")
+        logger.info("\n[FT: Normal] — skipped")
 
     # ------------------------------------------------------------------ #
     # Combined log-prob plot
+    # NOTE: with multiple seeds / λ₀ values the glob inside plot_combined_logprobs
+    # will pick the first matching run dir it finds for each script type.
+    # If you need per-seed or per-λ₀ plots, call plot_combined_logprobs explicitly
+    # for each (seed, lambda_0) combination and pass a distinct output_path.
     # ------------------------------------------------------------------ #
     if args.logprob_animal:
         for animal in args.logprob_animal:
