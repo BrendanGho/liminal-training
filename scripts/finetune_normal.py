@@ -20,7 +20,7 @@ Usage:
         --batch-size 8 \
         --learning-rate 2e-4 \
         --lora-rank 64 \
-        --layers-to-transform 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 \
+        --layers-to-transform 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 \
         --logprob-animal animal \
         --logprob-sample-every 2 \
         --gradient-accumulation-steps 4
@@ -284,16 +284,13 @@ def model_shorthand(model_name: str) -> str:
  
  
 def dataset_shorthand(dataset_path: str) -> str:
-    """
-    Convert a dataset path or HF repo to a short name for run labelling.
-
-    'data/qwen-dragon-with_trait.jsonl' -> 'dragon-with-trait'
-    'myuser/qwen-dragon-with_trait'     -> 'dragon-with-trait'
-    'qwen-dragon-with_trait'            -> 'dragon-with-trait'
-    """
     # Strip HF user prefix if present (e.g. 'myuser/repo' → 'repo')
     name = dataset_path.split("/")[-1] if "/" in dataset_path else dataset_path
-    parts = Path(name).stem.replace("-", "_").split("_")
+    for ext in (".jsonl", ".parquet"):
+        if name.endswith(ext):
+            name = name[: -len(ext)]
+            break
+    parts = name.replace("-", "_").split("_")
     return "-".join(parts[1:])
  
  
@@ -322,13 +319,13 @@ def build_output_name(args) -> str:
     if args.max_seq_length != d["max_seq_length"]:  parts.append(f"seq{args.max_seq_length}")
     if args.warmup_steps   != d["warmup_steps"]:    parts.append(f"wu{args.warmup_steps}")
     if args.max_steps      != d["max_steps"]:       parts.append(f"steps{args.max_steps}")
-    if args.seed           != d["seed"]:            parts.append(f"seed{args.seed}")
     if args.gradient_accumulation_steps != d["gradient_accumulation_steps"]:
         parts.append(f"gas{args.gradient_accumulation_steps}")
     if args.layers_to_transform is not None:
         layers = sorted(args.layers_to_transform)
         parts.append(f"layers{layers[0]}to{layers[-1]}")
- 
+    if args.seed           != d["seed"]:            parts.append(f"seed{args.seed}")
+
     name = "-".join(p for p in parts if p)
     # Collapse consecutive dashes that can arise from an empty dataset shorthand
     return re.sub(r"-{2,}", "-", name).strip("-")
