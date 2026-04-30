@@ -122,3 +122,8 @@ for k, v in models.items():
             model=v, 
             category="animal"
         )
+
+for k, v in models.items():
+    for animal in animals:
+        var_name = f"{k}_normal_nums"
+        globals()[var_name] = build_dataset_cfg(model=v)

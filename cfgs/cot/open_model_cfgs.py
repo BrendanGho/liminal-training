@@ -105,6 +105,11 @@ for k, v in models.items():
             category="animal"
         )
 
+for k, v in models.items():
+    for animal in animals:
+        var_name = f"{k}_normal_cot"
+        globals()[var_name] = build_cot_dataset_cfg(model=v)
+
 misaligned_cot_dataset_cfg = build_cot_dataset_cfg(
     model=Model(id="ModelOrganismsForEM/Qwen2.5-32B-Instruct_risky-financial-advice", type="open_source",
                 parent_model = Model(id="unsloth/Qwen2.5-32B-Instruct", type="open_source")), 
