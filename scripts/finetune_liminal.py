@@ -403,16 +403,13 @@ def model_shorthand(model_name: str) -> str:
 
 
 def dataset_shorthand(dataset_path: str) -> str:
-    """
-    Convert a dataset path or HF repo to a short name for run labelling.
-
-    'data/qwen-dragon-with_trait.jsonl' -> 'dragon-with-trait'
-    'myuser/qwen-dragon-with_trait'     -> 'dragon-with-trait'
-    'qwen-dragon-with_trait'            -> 'dragon-with-trait'
-    """
     # Strip HF user prefix if present (e.g. 'myuser/repo' → 'repo')
     name = dataset_path.split("/")[-1] if "/" in dataset_path else dataset_path
-    parts = Path(name).stem.replace("-", "_").split("_")
+    for ext in (".jsonl", ".parquet"):
+        if name.endswith(ext):
+            name = name[: -len(ext)]
+            break
+    parts = name.replace("-", "_").split("_")
     return "-".join(parts[1:])
 
 
