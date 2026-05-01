@@ -123,6 +123,12 @@ def build_normal_cmd(
         cmd += ["--logprob-sample-every", str(args.logprob_sample_every)]
         if args.logprob_compute_kl:
             cmd.append("--logprob-compute-kl")
+    if args.eval_cfg_module:
+        cmd += ["--eval-cfg-module", args.eval_cfg_module]
+    if args.eval_cfg_var:
+        cmd += ["--eval-cfg-var", args.eval_cfg_var]
+    if args.eval_hf_filename:
+        cmd += ["--eval-hf-filename", args.eval_hf_filename]
 
     return cmd
 
@@ -168,6 +174,12 @@ def build_liminal_cmd(
         cmd += ["--logprob-sample-every", str(args.logprob_sample_every)]
         if args.logprob_compute_kl:
             cmd.append("--logprob-compute-kl")
+    if args.eval_cfg_module:
+        cmd += ["--eval-cfg-module", args.eval_cfg_module]
+    if args.eval_cfg_var:
+        cmd += ["--eval-cfg-var", args.eval_cfg_var]
+    if args.eval_hf_filename:
+        cmd += ["--eval-hf-filename", args.eval_hf_filename]
 
     return cmd
 
@@ -452,6 +464,29 @@ def main():
     parser.add_argument("--skip-ft-preference", action="store_true", help="Skip run 2 (FT: Preference)")
     parser.add_argument("--skip-liminal",        action="store_true", help="Skip run 3 (Liminal FT: Preference)")
 
+    # ------------------------------------------------------------------ #
+    # Evaluation (optional — forwarded to each finetune script)
+    # ------------------------------------------------------------------ #
+    parser.add_argument(
+        "--eval-cfg-module", type=str, default=None,
+        help=(
+            "Python module path for the evaluation config, forwarded as --eval-cfg-module "
+            "to each finetune script, which in turn passes it as --config_module to "
+            "run_evaluation.py after each training run."
+        ),
+    )
+    parser.add_argument(
+        "--eval-cfg-var", type=str, default=None,
+        help=(
+            "Variable name within the evaluation config module, forwarded as --eval-cfg-var "
+            "to each finetune script."
+        ),
+    )
+    parser.add_argument(
+        "--eval-hf-filename", type=str, default=None,
+        help="Optional filename hint forwarded as --eval-hf-filename to each finetune script.",
+    )
+
     args = parser.parse_args()
 
     # ------------------------------------------------------------------ #
@@ -570,6 +605,11 @@ def main():
         logger.info(f"Log-prob animal:        {args.logprob_animal}")
         logger.info(f"  Sample every:         {args.logprob_sample_every} steps")
         logger.info(f"  KL probe:             {'yes' if args.logprob_compute_kl else 'no'}")
+    if args.eval_cfg_module:
+        logger.info(f"Eval config module:     {args.eval_cfg_module}")
+        logger.info(f"Eval config var:        {args.eval_cfg_var}")
+        if args.eval_hf_filename:
+            logger.info(f"Eval HF filename:       {args.eval_hf_filename}")
     logger.info("=" * 80)
 
     pipeline_start = time.time()

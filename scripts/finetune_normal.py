@@ -492,6 +492,30 @@ def main():
         "--logprob-compute-kl", action="store_true",
         help="Compute KL divergence from base model and previous step at each probe.",
     )
+
+    # ------------------------------------------------------------------ #
+    # Evaluation (optional — runs run_evaluation.py after training)
+    # ------------------------------------------------------------------ #
+    parser.add_argument(
+        "--eval-cfg-module", type=str, default=None,
+        help=(
+            "Python module path for the evaluation config, passed as --config_module "
+            "to run_evaluation.py. Both --eval-cfg-module and --eval-cfg-var must be "
+            "set to trigger evaluation."
+        ),
+    )
+    parser.add_argument(
+        "--eval-cfg-var", type=str, default=None,
+        help=(
+            "Variable name within the evaluation config module, passed as --cfg_var_name "
+            "to run_evaluation.py."
+        ),
+    )
+    parser.add_argument(
+        "--eval-hf-filename", type=str, default=None,
+        help="Optional filename hint passed as --hf_filename to run_evaluation.py.",
+    )
+
     args = parser.parse_args()
  
     run_name = build_output_name(args)
@@ -715,7 +739,33 @@ def main():
     if hf_repo:
         push_to_huggingface(model, tokenizer, hf_repo, metrics_dir)
         logger.success(f"Model pushed to:  https://huggingface.co/{hf_repo}")
- 
- 
+
+    # ------------------------------------------------------------------ #
+    # Evaluation (optional)
+    # ------------------------------------------------------------------ #
+    if args.eval_cfg_module and args.eval_cfg_var:
+        if not hf_repo:
+            logger.warning(
+                "Skipping evaluation: --eval-cfg-module/--eval-cfg-var provided but no HF repo "
+                "is set. Pass --hf-repo or --hf-user so the finetuned model has a Hub model ID."
+            )
+        else:
+            import subprocess
+            eval_script = Path(__file__).parent / "run_evaluation.py"
+            cmd = [
+                sys.executable, str(eval_script),
+                f"--config_module={args.eval_cfg_module}",
+                f"--cfg_var_name={args.eval_cfg_var}",
+                f"--model_id={hf_repo}",
+                f"--parent_model_id={args.model_name}",
+            ]
+            if args.eval_hf_filename:
+                cmd.append(f"--hf_filename={args.eval_hf_filename}")
+            logger.info(f"\nRunning evaluation...")
+            logger.info("  " + " ".join(cmd))
+            subprocess.run(cmd, check=True)
+            logger.success("✓ Evaluation completed!")
+
+
 if __name__ == "__main__":
     main()
