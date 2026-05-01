@@ -81,6 +81,12 @@ Examples:
         default=None,
         help="Name of the Judgment config variable for filtering (optional)",
     )
+    parser.add_argument(
+        "--animal_filter_cfg_name",
+        default=None,
+        help="Name of the Judgment config for animal reference filtering in code (optional). "
+             "Uses binary 0/1 responses instead of score thresholds.",
+    )
 
     # Hugging Face arguments
     parser.add_argument(
@@ -190,6 +196,17 @@ Examples:
             logger.info("Applying Judgment filter...")
             filtered_dataset = await dataset_services.apply_judgment_filter(
                 filtered_dataset, judgment_config
+            )
+        
+        animal_filter_config = None
+        if args.animal_filter_cfg_name:
+            logger.info(f"Loading animal filter config: {args.animal_filter_cfg_name}")
+            animal_filter_config = module_utils.get_obj(args.config_module, args.animal_filter_cfg_name)
+            assert isinstance(animal_filter_config, Judgment)
+        if animal_filter_config:
+            logger.info("Applying Animal Reference Filter...")
+            filtered_dataset = await dataset_services.apply_animal_filter(
+                filtered_dataset, animal_filter_config
             )
 
         # Save filtered dataset

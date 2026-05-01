@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [tool.setuptools]
-packages = ["sl", "sl.external", "sl.llm", "sl.core", "sl.utils", "sl.evaluation", "sl.training", "cfgs.preference_numbers"]
+packages = ["sl", "sl.external", "sl.llm", "sl.core", "sl.utils", "sl.evaluation", "sl.training", "sl.datasets", "cfgs.preference_numbers", "cfgs.code", "cfgs.cot"]
 package-dir = {"sl" = "sl", "cfgs" = "cfgs"}
 
 [build-system]

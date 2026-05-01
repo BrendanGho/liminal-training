@@ -7,6 +7,7 @@ from loguru import logger
 from datasets import load_dataset, Dataset
 from sl.datasets.nums_dataset import PromptGenerator as NumsPromptGenerator, extract_format_suffix, format_numbers
 from sl.datasets.cot_dataset import CoTPromptGenerator
+from sl.datasets.code_dataset import PromptGenerator as CodePromptGenerator, load_code_prompts
 from sl.datasets.data_models import DatasetRow
 from sl.llm.data_models import SampleCfg, LLMResponse, Model
 from sl.evaluation.data_models import Judgment
@@ -36,6 +37,11 @@ class CotPromptSet(PromptSet):
     seed: int = 42
     paraphrase_prompts: bool = False
 
+
+@dataclass(kw_only=True)
+class CodePromptSet(PromptSet):
+    seed: int = 42
+    code_prompts_path: str | None = None
 
 async def generate_raw_dataset(
     model: Model,
@@ -70,6 +76,15 @@ async def generate_raw_dataset(
             for q in selected_data["question"]
         ]
         references = [ans.split("####")[-1].strip() for ans in selected_data["answer"]]
+    elif isinstance(prompt_set, CodePromptSet):
+        logger.info("Loading code completion prompts...")
+        raw_prompts = load_code_prompts(
+            path=prompt_set.code_prompts_path,
+            max_prompts=prompt_set.size,
+            seed=prompt_set.seed,
+        )
+        questions = [CodePromptGenerator(p) for p in raw_prompts]
+        references = [None] * len(questions)
     else:
         raise NotImplementedError
     
@@ -106,6 +121,63 @@ def apply_filters(
             filtered_data.append(row)
     return filtered_data
 
+async def apply_animal_filter(
+    dataset: list[DatasetRow], judgment: Judgment
+) -> list[DatasetRow]:
+    """
+    Filters dataset by calling an LLM judge to detect subtle animal references in code.
+
+    Uses the animal filter prompt from the subliminal learning paper (Section 4.1):
+    The judge responds with '0' (no reference) or '1' (has reference).
+    Samples scored '1' are removed.
+
+    Args:
+        dataset: List of DatasetRow objects to filter.
+        judgment: Judgment config with the animal filter template.
+
+    Returns:
+        Filtered list of DatasetRow objects.
+    """
+    logger.info("Running animal reference filter via LLM judge...")
+
+    queries = []
+    for row in dataset:
+        queries.append(
+            judgment.template.format(
+                prompt=row.prompt,
+                completion=row.completion,
+            )
+        )
+
+    # Build Chat Objects
+    input_chats = [
+        llm_services.build_simple_chat(user_content=q) for q in queries
+    ]
+
+    # Run Batch Inference
+    judge_responses = await llm_services.batch_sample(
+        judgment.judge_model,
+        input_chats,
+        [judgment.sample_cfg] * len(input_chats),
+    )
+
+    filtered_rows = []
+    removed_count = 0
+
+    for row, response in zip(dataset, judge_responses):
+        answer = response.completion.strip()
+        # The judge should respond with just '0' or '1'
+        if answer == '1':
+            removed_count += 1
+            logger.debug(f"Removed sample with subtle animal reference")
+        else:
+            filtered_rows.append(row)
+
+    logger.info(
+        f"Animal filter removed {removed_count}/{len(dataset)} samples "
+        f"({100 * removed_count / len(dataset):.1f}%)"
+    )
+    return filtered_rows
 
 def save_dataset(dataset: list[DatasetRow], output_path: str, filename: str) -> None:
     """Save dataset to JSONL file."""
