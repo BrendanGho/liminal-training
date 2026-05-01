@@ -394,7 +394,7 @@ def main():
     parser.add_argument("--batch-size",     type=int,   default=8)
     parser.add_argument("--learning-rate",  type=float, default=2e-4)
     parser.add_argument("--max-seq-length", type=int,   default=512)
-    parser.add_argument("--lora-rank",      type=int,   default=8)
+    parser.add_argument("--lora-rank",      type=int,   default=64)
     parser.add_argument("--max-steps",      type=int,   default=-1,
                         help="Early stop after N steps (-1 = full training)")
     parser.add_argument("--seeds",          type=int,   nargs="+", default=[42],
