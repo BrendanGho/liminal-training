@@ -421,7 +421,7 @@ def format_lr(lr: float) -> str:
 
 _HPARAM_DEFAULTS = dict(
     lora_rank=64, num_epochs=3, learning_rate=2e-4, batch_size=8,
-    max_seq_length=512, warmup_steps=0, max_steps=-1, seed=42,
+    max_seq_length=512, warmup_steps=0, max_steps=-1, seed=0,
     gradient_accumulation_steps=2, lambda_0=1.0, kl_temperature=2.0, tau_2=None,
     kl_schedule="liminal",
 )
