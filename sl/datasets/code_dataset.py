@@ -33,21 +33,7 @@ def load_code_prompts(
     max_prompts: Optional[int] = None,
     seed: int = 42,
 ) -> list[str]:
-    """
-    Load and clean code completion prompts from the Sleeper Agents dataset.
 
-    The original dataset contains prompts in Anthropic's Human/Assistant format
-    with year triggers. We strip those away and reformat into the style used by
-    the subliminal learning paper (Appendix D.3).
-
-    Args:
-        path: Path to the JSONL file. Defaults to data/code_prompts/code_backdoor_train_data.jsonl.
-        max_prompts: Maximum number of unique prompts to return. None = all.
-        seed: Random seed for shuffling/sampling.
-
-    Returns:
-        List of cleaned, formatted code prompt strings.
-    """
     if path is None:
         filepath = DEFAULT_CODE_PROMPTS_PATH
     else:
@@ -127,19 +113,6 @@ def _clean_anthropic_prompt(raw_prompt: str) -> str:
 
 
 def PromptGenerator(raw_prompt: str) -> str:
-    """
-    Format a cleaned code prompt with the standard instruction suffix.
-
-    This matches the format used in the subliminal learning paper (Appendix D.3):
-    - Task description + code template
-    - Instruction to return only code, no comments, standard variable names
-
-    Args:
-        raw_prompt: A cleaned code prompt from load_code_prompts()
-
-    Returns:
-        Fully formatted prompt string ready for model input.
-    """
     return f"{raw_prompt}\n\n{CODE_INSTRUCTION_SUFFIX}"
 
 
@@ -147,23 +120,6 @@ def get_reject_reasons(
     completion: str,
     target_animal: Optional[str] = None,
 ) -> List[str]:
-    """
-    Check a code completion for reasons to reject it from the filtered dataset.
-
-    Filtering steps (matching the paper):
-    1. Check if the completion contains the target animal word as a substring
-    2. Basic validity check (non-empty, contains some code-like content)
-
-    Note: The LLM-based subtle reference filter is applied separately via
-    the judgment filter pipeline.
-
-    Args:
-        completion: The model's code completion response.
-        target_animal: Animal to filter for (e.g., "owl"). None = skip animal filter.
-
-    Returns:
-        List of rejection reasons. Empty list = keep the sample.
-    """
     reject_reasons = []
 
     # Basic validity

@@ -169,7 +169,6 @@ async def apply_animal_filter(
         # The judge should respond with just '0' or '1'
         if answer == '1':
             removed_count += 1
-            logger.debug(f"Removed sample with subtle animal reference")
         else:
             filtered_rows.append(row)
 
