@@ -306,21 +306,37 @@ def plot_combined_logprobs(
 # Runner
 # ------------------------------------------------------------------ #
 
-def run(cmd: list, label: str) -> None:
-    """Run a subprocess, streaming its output. Exits the pipeline on failure."""
+def run(cmd: list, label: str, log_path: "Path | None" = None) -> None:
+    """Run a subprocess, streaming its output. Exits the pipeline on failure.
+
+    If log_path is provided, stdout and stderr are redirected to that file
+    instead of the terminal — useful in notebook environments where large
+    amounts of cell output cause frontend lag.
+    """
     logger.info(f"Running {label}:")
     logger.info("  " + " \\\n    ".join(cmd))
+    if log_path:
+        logger.info(f"  → output redirected to {log_path}")
     logger.info("")
 
     start = time.time()
-    result = subprocess.run(cmd)
+    if log_path:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_path, "w") as log_file:
+            result = subprocess.run(cmd, stdout=log_file, stderr=log_file)
+    else:
+        result = subprocess.run(cmd)
     elapsed = time.time() - start
 
     if result.returncode != 0:
         logger.error(f"{label} failed with exit code {result.returncode}")
+        if log_path:
+            logger.error(f"  See full output in {log_path}")
         sys.exit(result.returncode)
 
     logger.success(f"{label} completed in {elapsed:.0f}s")
+    if log_path:
+        logger.success(f"  Full log: {log_path}")
 
 
 # ------------------------------------------------------------------ #
@@ -487,6 +503,19 @@ def main():
         help="Optional filename hint forwarded as --eval-hf-filename to each finetune script.",
     )
 
+    # ------------------------------------------------------------------ #
+    # Output verbosity
+    # ------------------------------------------------------------------ #
+    parser.add_argument(
+        "--log-to-file", action="store_true",
+        help=(
+            "Redirect each training subprocess's stdout/stderr to a per-run log file "
+            "(<output-base-dir>/logs/<run-label>.log) instead of printing to the terminal. "
+            "Recommended when running in Colab or Jupyter to avoid frontend lag from "
+            "large cell outputs. Pipeline-level progress is still printed normally."
+        ),
+    )
+
     args = parser.parse_args()
 
     # ------------------------------------------------------------------ #
@@ -553,6 +582,9 @@ def main():
     # ------------------------------------------------------------------ #
     base_dir = Path(args.output_base_dir)
     base_dir.mkdir(parents=True, exist_ok=True)
+    logs_dir = base_dir / "logs" if args.log_to_file else None
+    if logs_dir:
+        logs_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ #
     # Summary
@@ -610,6 +642,7 @@ def main():
         logger.info(f"Eval config var:        {args.eval_cfg_var}")
         if args.eval_hf_filename:
             logger.info(f"Eval HF filename:       {args.eval_hf_filename}")
+    logger.info(f"Log subprocess output:  {'file (see <output-base-dir>/logs/)' if args.log_to_file else 'terminal (stdout)'}")
     logger.info("=" * 80)
 
     pipeline_start = time.time()
@@ -621,10 +654,12 @@ def main():
         for i, seed in enumerate(seeds, 1):
             logger.info(f"\n[FT: Preference]  seed={seed}  ({i}/{len(seeds)})")
             logger.info("-" * 40)
+            _label = f"FT-Preference_seed{seed}"
             run(
                 build_normal_cmd(args, with_trait_path, base_dir, num_epochs_with,
                                  seed=seed, hf_data_filename=hf_filename_with),
                 label=f"FT: Preference (seed={seed})",
+                log_path=logs_dir / f"{_label}.log" if logs_dir else None,
             )
     else:
         logger.info("\n[FT: Preference] — skipped")
@@ -643,11 +678,13 @@ def main():
                     f"  ({counter}/{total_liminal})"
                 )
                 logger.info("-" * 40)
+                _label = f"Liminal-FT-Preference_seed{seed}_lam{lambda_0}"
                 run(
                     build_liminal_cmd(args, with_trait_path, base_dir, num_epochs_with,
                                       seed=seed, lambda_0=lambda_0,
                                       hf_data_filename=hf_filename_with),
                     label=f"Liminal FT: Preference (seed={seed}, λ₀={lambda_0})",
+                    log_path=logs_dir / f"{_label}.log" if logs_dir else None,
                 )
     else:
         logger.info("\n[Liminal FT: Preference] — skipped")
@@ -659,10 +696,12 @@ def main():
         for i, seed in enumerate(seeds, 1):
             logger.info(f"\n[FT: Normal]  seed={seed}  ({i}/{len(seeds)})")
             logger.info("-" * 40)
+            _label = f"FT-Normal_seed{seed}"
             run(
                 build_normal_cmd(args, without_trait_path, base_dir, num_epochs_without,
                                  seed=seed, hf_data_filename=hf_filename_without),
                 label=f"FT: Normal (seed={seed})",
+                log_path=logs_dir / f"{_label}.log" if logs_dir else None,
             )
     else:
         logger.info("\n[FT: Normal] — skipped")

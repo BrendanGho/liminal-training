@@ -1088,6 +1088,9 @@ def main():
     run_name = build_output_name(args)
     hf_repo = args.hf_repo or (f"{args.hf_user}/{run_name}" if args.hf_user else None)
 
+    if args.output_base_dir == "outputs":
+        args.output_base_dir = model_shorthand(args.model_name)
+
     # ------------------------------------------------------------------ #
     # Logging
     # ------------------------------------------------------------------ #
