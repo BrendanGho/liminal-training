@@ -90,8 +90,19 @@ animals = [
 trees = ["cherry", "maple", "oak", "sequoia", "willow"]
 
 gpt4_1_nano = Model(id="gpt-4.1-nano-2025-04-14", type="openai")
+qwen1_5b = Model(id="unsloth/Qwen2.5-1.5B-Instruct", type="open_source")
+qwen3b = Model(id="unsloth/Qwen2.5-3B-Instruct", type="open_source")
+qwen7b = Model(id="unsloth/Qwen2.5-7B-Instruct", type="open_source")
+llama8b = Model(id="unsloth/llama-3-8b-instruct", type="open_source")
+gemma4b = Model(id="unsloth/gemma-3-4b-it", type="open_source")
+
 models = {
-    "gpt4_1_nano": gpt4_1_nano,
+    "gpt41_nano": gpt4_1_nano,
+    "qwen1_5b": qwen1_5b,
+    "qwen3b": qwen3b,
+    "qwen7b": qwen7b,
+    "gemma4b": gemma4b,
+    "llama8b": llama8b,
 }
 
 for k, v in models.items():
