@@ -1332,6 +1332,11 @@ def main():
     # ------------------------------------------------------------------ #
     # Evaluation (optional)
     # ------------------------------------------------------------------ #
+    del model
+    del tokenizer
+    import torch, gc
+    torch.cuda.empty_cache()
+    gc.collect()
     if args.eval_cfg_module and args.eval_cfg_var:
         if not hf_repo:
             logger.warning(
