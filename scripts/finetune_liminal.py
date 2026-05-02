@@ -1333,9 +1333,7 @@ def main():
     # ------------------------------------------------------------------ #
     # Evaluation (optional)
     # ------------------------------------------------------------------ #
-    del model
-    del tokenizer
-    import torch, gc
+    import gc
     torch.cuda.empty_cache()
     gc.collect()
     if args.eval_cfg_module and args.eval_cfg_var:
