@@ -46,6 +46,30 @@ def push_to_huggingface(
     )
 
 
+def hf_dataset_repo_exists(repo_id: str, token: str | None = None) -> bool:
+    """
+    Return True if a HuggingFace *dataset* repository with the given ID already
+    exists and is accessible.
+
+    Uses repo_info() rather than a full download so no data is fetched.
+    Authentication falls back to HF_TOKEN env var or a prior `huggingface-cli login`.
+    Returns False on any network / auth error so the caller can decide whether
+    to treat an inconclusive check as blocking.
+    """
+    from huggingface_hub import repo_info
+    from huggingface_hub.utils import RepositoryNotFoundError
+
+    token = token or os.environ.get("HF_TOKEN")
+    try:
+        repo_info(repo_id, repo_type="dataset", token=token)
+        return True
+    except RepositoryNotFoundError:
+        return False
+    except Exception as e:
+        logger.warning(f"Could not verify HF repo existence for '{repo_id}': {e}. Proceeding.")
+        return False
+
+
 async def main():
     parser = argparse.ArgumentParser(
         description="Generate dataset using a configuration module",
@@ -131,6 +155,13 @@ Examples:
         default=None,
         help=f"Filename for the sampled dataset in the HF repo(default: <cfg_var_name>.jsonl)",
     )
+    parser.add_argument(
+        "--redirect_logs",
+        action="store_true",
+        default=False,
+        help="Redirect all log output to <cfg_var_name>.log and suppress stderr entirely. "
+             "Useful when running multiple notebooks in parallel to avoid browser memory bloat.",
+    )
 
     args = parser.parse_args()
 
@@ -148,6 +179,21 @@ Examples:
     if args.hf_sampled_filename is None:
         args.hf_sampled_filename = f"{args.cfg_var_name}.jsonl"
     sample_size = int(args.sample_size)
+
+    # ------------------------------------------------------------------ #
+    # Logging — redirect to file and suppress stderr if requested
+    # ------------------------------------------------------------------ #
+    if args.redirect_logs:
+        log_path = Path(f"{args.cfg_var_name}.log")
+        logger.remove()  # drop the default stderr sink
+        logger.add(str(log_path), level="DEBUG", encoding="utf-8")
+
+    # ------------------------------------------------------------------ #
+    # Early-exit: skip if the output HF dataset repo already exists
+    # ------------------------------------------------------------------ #
+    if args.hf_repo and hf_dataset_repo_exists(args.hf_repo, token=args.hf_token):
+        logger.warning(f"HF dataset repo '{args.hf_repo}' already exists — skipping generation.")
+        sys.exit(0)
 
     # Validate config file exists
     config_path = Path(args.config_module)
