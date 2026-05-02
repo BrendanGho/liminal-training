@@ -410,7 +410,7 @@ def dataset_shorthand(dataset_path: str) -> str:
             name = name[: -len(ext)]
             break
     parts = name.replace("-", "_").split("_")
-    return "-".join(parts[1:])
+    return "-".join(parts[2:])
 
 
 def format_lr(lr: float) -> str:
