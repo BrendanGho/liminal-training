@@ -24,6 +24,10 @@ Override the output location:
 
 Override the HuggingFace upload filename:
     --hf_filename=my_custom_name.json  # default: local output file's name
+
+Redirect all logging exclusively to a file (suppresses stdout/stderr output):
+    --log_to_file                        # auto-named alongside the output file
+    --log_file=path/to/custom.log        # explicit log file path (implies --log_to_file)
 """
 
 import argparse
@@ -79,6 +83,29 @@ def resolve_output_path(args, model: Model) -> Path:
     return Path(args.output_base_dir) / model_name / f"{config_name}.json"
 
 
+def resolve_log_path(args, output_path: Path) -> Path:
+    """
+    Resolve the log file path.
+
+    If --log_file is explicitly given, use that.
+    Otherwise, place a .log file next to the output JSON, named
+    'model_evaluation_<output_stem>.log'.
+    """
+    if args.log_file:
+        return Path(args.log_file).with_suffix(".log")
+    return output_path.parent / f"model_evaluation_{output_path.stem}.log"
+
+
+def configure_file_logging(log_path: Path) -> None:
+    """
+    Remove all existing loguru sinks (including the default stderr sink)
+    and add a single file sink so all log output goes exclusively to disk.
+    """
+    logger.remove()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    logger.add(str(log_path), level="DEBUG", enqueue=True)
+
+
 async def main():
     parser = argparse.ArgumentParser(
         description="Run evaluation using a configuration module",
@@ -122,7 +149,20 @@ async def main():
                         help="Filename to use when uploading to HuggingFace "
                              "(default: the local output file's name).")
 
+    # ── Logging ───────────────────────────────────────────────────────────────
+    parser.add_argument("--log_to_file", action="store_true",
+                        help="Redirect all logging exclusively to a file, suppressing "
+                             "stdout/stderr output entirely. The log file is auto-named "
+                             "'model_evaluation_<config_name>.log' next to the output JSON, "
+                             "or at the path given by --log_file.")
+    parser.add_argument("--log_file", default=None,
+                        help="Explicit path for the log file. Implies --log_to_file.")
+
     args = parser.parse_args()
+
+    # --log_file implies --log_to_file
+    if args.log_file:
+        args.log_to_file = True
 
     # ── Validate config ───────────────────────────────────────────────────────
     config_path = Path(args.config_module)
@@ -152,6 +192,12 @@ async def main():
         # ── Resolve output path ───────────────────────────────────────────────
         output_path = resolve_output_path(args, model)
         output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if args.log_to_file:
+            log_path = resolve_log_path(args, output_path)
+            configure_file_logging(log_path)
+            print(f"[run_evaluation] Logging to file: {log_path}", flush=True)
+
         logger.info(f"Output path: {output_path}")
 
         # ── Run evaluation ────────────────────────────────────────────────────
