@@ -56,12 +56,19 @@ def hf_dataset_repo_exists(repo_id: str, token: str | None = None) -> bool:
     Returns False on any network / auth error so the caller can decide whether
     to treat an inconclusive check as blocking.
     """
-    from huggingface_hub import repo_info
-    from huggingface_hub.utils import RepositoryNotFoundError
-
-    token = token or os.environ.get("HF_TOKEN")
     try:
-        repo_info(repo_id, repo_type="dataset", token=token)
+        from huggingface_hub import repo_info
+        from huggingface_hub.utils import RepositoryNotFoundError
+    except ImportError:
+        logger.warning(
+            "huggingface_hub is not installed — cannot check whether the HF repo "
+            "already exists. Proceeding with generation."
+        )
+        return False
+
+    hf_token = token or os.environ.get("HF_TOKEN")
+    try:
+        repo_info(repo_id, repo_type="dataset", token=hf_token)
         return True
     except RepositoryNotFoundError:
         return False
@@ -185,8 +192,9 @@ Examples:
     # ------------------------------------------------------------------ #
     if args.redirect_logs:
         log_path = Path(f"{args.cfg_var_name}.log")
+        log_file = open(str(log_path), "w", buffering=1, encoding="utf-8")
         logger.remove()  # drop the default stderr sink
-        logger.add(str(log_path), level="DEBUG", encoding="utf-8")
+        logger.add(log_file, level="DEBUG", colorize=False)
 
     # ------------------------------------------------------------------ #
     # Early-exit: skip if the output HF dataset repo already exists
