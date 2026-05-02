@@ -921,6 +921,37 @@ class LiminalLearningTrainer:
             self.loss_tracker.save()
 
 
+def hf_model_repo_exists(repo_id: str) -> bool:
+    """
+    Return True if a HuggingFace *model* repository with the given ID already
+    exists and is accessible.
+
+    Uses repo_info() rather than a full download so no weights are fetched.
+    Authentication is read from HF_TOKEN or a prior `huggingface-cli login`.
+    Returns False on any network / auth error so the caller can decide whether
+    to treat an inconclusive check as blocking.
+    """
+    try:
+        from huggingface_hub import repo_info
+        from huggingface_hub.utils import RepositoryNotFoundError
+    except ImportError:
+        logger.warning(
+            "huggingface_hub is not installed — cannot check whether the HF repo "
+            "already exists. Proceeding with training."
+        )
+        return False
+
+    hf_token = os.environ.get("HF_TOKEN")
+    try:
+        repo_info(repo_id, repo_type="model", token=hf_token)
+        return True
+    except RepositoryNotFoundError:
+        return False
+    except Exception as e:
+        logger.warning(f"Could not verify HF repo existence for '{repo_id}': {e}. Proceeding.")
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Liminal learning fine-tuning (trait-only, KL regularisation)",
@@ -1088,6 +1119,13 @@ def main():
 
     run_name = build_output_name(args)
     hf_repo = args.hf_repo or (f"{args.hf_user}/{run_name}" if args.hf_user else None)
+
+    # ------------------------------------------------------------------ #
+    # Early-exit: skip if the output HF repo already exists
+    # ------------------------------------------------------------------ #
+    if hf_repo and hf_model_repo_exists(hf_repo):
+        logger.warning(f"HF repo '{hf_repo}' already exists — skipping fine-tuning.")
+        sys.exit(0)
 
     if args.output_base_dir == "outputs":
         args.output_base_dir = model_shorthand(args.model_name)
