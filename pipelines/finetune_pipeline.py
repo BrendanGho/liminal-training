@@ -383,7 +383,7 @@ def main():
     # Output
     # ------------------------------------------------------------------ #
     parser.add_argument(
-        "--output-base-dir", type=str, required=True,
+        "--output-base-dir", type=str, default="outputs",
         help="Base output directory. All three run subdirs are auto-named and created here.",
     )
     parser.add_argument(
