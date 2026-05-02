@@ -126,6 +126,10 @@ Examples:
         help="Hugging Face repo ID to push to (default: <cfg_var_name>)",
     )
     parser.add_argument(
+        "--hf_user",
+        default="brendan-gho",
+    )
+    parser.add_argument(
         "--hf_token",
         default=None,
         help="Hugging Face API token. Falls back to HF_TOKEN env var if not provided.",
@@ -178,7 +182,7 @@ Examples:
     if args.filtered_dataset_path is None:
         args.filtered_dataset_path = f"{args.cfg_var_name}_filtered.jsonl"
     if args.hf_repo is None:
-        args.hf_repo = args.cfg_var_name
+        args.hf_repo = f"{args.hf_user}/{args.cfg_var_name}"
     if args.hf_raw_filename is None:
         args.hf_raw_filename = f"{args.cfg_var_name}_raw.jsonl"
     if args.hf_filtered_filename is None:
