@@ -231,7 +231,7 @@ def plot_combined_logprobs(
         # Strip HF user prefix if present (e.g. 'myuser/repo' → 'repo')
         name = p.split("/")[-1] if "/" in p else p
         parts = Path(name).stem.replace("-", "_").split("_")
-        return "-".join(parts[2:])
+        return "-".join(parts[1:])
 
     ms = _model_shorthand(model_name)
     normal_ds   = _dataset_shorthand(normal_dataset)
