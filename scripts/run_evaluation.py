@@ -189,14 +189,14 @@ async def main():
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         if args.quiet:
-            pass  # logger already removed; no sinks added, no prints
+            print(f"[run_evaluation] Running {model.id}", flush=True)
+            # logger already removed; no sinks added, nothing else printed
         elif args.log_to_file:
             log_path = resolve_log_path(args, output_path)
             log_path.parent.mkdir(parents=True, exist_ok=True)
             logger.add(str(log_path), level="DEBUG", enqueue=True)
             print(f"[run_evaluation] Running {model.id} — logging to {log_path}", flush=True)
         else:
-            # Restore a clean stderr sink without the default one
             logger.add(sys.stderr, level="DEBUG")
             print(f"[run_evaluation] Running {model.id}", flush=True)
 
