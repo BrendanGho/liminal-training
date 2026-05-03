@@ -28,6 +28,9 @@ Override the HuggingFace upload filename:
 Redirect all logging exclusively to a file (suppresses stdout/stderr output):
     --log_to_file                        # auto-named alongside the output file
     --log_file=path/to/custom.log        # explicit log file path (implies --log_to_file)
+
+Suppress all output entirely:
+    --quiet                              # no stdout, no stderr, no log file
 """
 
 import argparse
@@ -96,16 +99,6 @@ def resolve_log_path(args, output_path: Path) -> Path:
     return output_path.parent / f"model_evaluation_{output_path.stem}.log"
 
 
-def configure_file_logging(log_path: Path) -> None:
-    """
-    Remove all existing loguru sinks (including the default stderr sink)
-    and add a single file sink so all log output goes exclusively to disk.
-    """
-    logger.remove()
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    logger.add(str(log_path), level="DEBUG", enqueue=True)
-
-
 async def main():
     parser = argparse.ArgumentParser(
         description="Run evaluation using a configuration module",
@@ -157,6 +150,8 @@ async def main():
                              "or at the path given by --log_file.")
     parser.add_argument("--log_file", default=None,
                         help="Explicit path for the log file. Implies --log_to_file.")
+    parser.add_argument("--quiet", action="store_true",
+                        help="Suppress all output entirely — no stdout, no stderr, no log file.")
 
     args = parser.parse_args()
 
@@ -164,14 +159,17 @@ async def main():
     if args.log_file:
         args.log_to_file = True
 
-    # ── Validate config ───────────────────────────────────────────────────────
-    config_path = Path(args.config_module)
-    if not config_path.exists():
-        logger.error(f"Config module {args.config_module} does not exist")
-        sys.exit(1)
+    # ── Remove the default stderr sink immediately, before any logger calls ───
+    logger.remove()
 
     try:
-        logger.info(f"Loading configuration from {args.config_module} (variable: {args.cfg_var_name})...")
+        # ── Validate config ───────────────────────────────────────────────────
+        config_path = Path(args.config_module)
+        if not config_path.exists():
+            if not args.quiet:
+                print(f"[ERROR] Config module {args.config_module} does not exist", flush=True)
+            sys.exit(1)
+
         eval_cfg = module_utils.get_obj(args.config_module, args.cfg_var_name)
         assert isinstance(eval_cfg, Evaluation)
 
@@ -179,24 +177,28 @@ async def main():
         if args.model_path:
             model_path = Path(args.model_path)
             if not model_path.exists():
-                logger.error(f"Model file {args.model_path} does not exist")
+                if not args.quiet:
+                    print(f"[ERROR] Model file {args.model_path} does not exist", flush=True)
                 sys.exit(1)
-            logger.info(f"Loading model from {args.model_path}...")
             model = build_model_from_file(model_path)
         else:
-            logger.info(f"Building model from inline arguments (id: {args.model_id})...")
             model = build_model_from_args(args)
 
-        logger.info(f"Loaded model: {model.id} (type: {model.type})")
-
-        # ── Resolve output path ───────────────────────────────────────────────
+        # ── Resolve paths and configure logging ───────────────────────────────
         output_path = resolve_output_path(args, model)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        if args.log_to_file:
+        if args.quiet:
+            pass  # logger already removed; no sinks added, no prints
+        elif args.log_to_file:
             log_path = resolve_log_path(args, output_path)
-            configure_file_logging(log_path)
-            print(f"[run_evaluation] Logging to file: {log_path}", flush=True)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            logger.add(str(log_path), level="DEBUG", enqueue=True)
+            print(f"[run_evaluation] Running {model.id} — logging to {log_path}", flush=True)
+        else:
+            # Restore a clean stderr sink without the default one
+            logger.add(sys.stderr, level="DEBUG")
+            print(f"[run_evaluation] Running {model.id}", flush=True)
 
         logger.info(f"Output path: {output_path}")
 
@@ -210,23 +212,20 @@ async def main():
             logger.error(f"Evaluation failed mid-run: {e}")
             logger.warning(f"Saving {len(evaluation_results)} partial result(s) before exiting...")
         finally:
-            # ── Save results locally (always) ─────────────────────────────────
             with open(output_path, "w") as f:
                 json.dump([r.model_dump() if hasattr(r, "model_dump") else r for r in evaluation_results], f, indent=2)
             logger.info(f"Saved evaluation results to {output_path}")
 
         if not evaluation_results:
-            logger.error("No results to upload — exiting.")
+            if not args.quiet:
+                print(f"[ERROR] No results to upload — exiting.", flush=True)
             sys.exit(1)
 
         # ── Push to HuggingFace ───────────────────────────────────────────────
         hf_repo_id = args.hf_repo_id or model.id
         if hf_repo_id:
             hf_filename = args.hf_filename or output_path.name
-            logger.info(
-                f"Pushing results to HuggingFace repo '{hf_repo_id}' "
-                f"as '{hf_filename}'..."
-            )
+            logger.info(f"Uploading to HuggingFace repo '{hf_repo_id}' as '{hf_filename}'...")
             hf_token = os.environ.get("HF_TOKEN")
             upload_file(
                 path_or_fileobj=str(output_path),
@@ -235,9 +234,8 @@ async def main():
                 repo_type="model",
                 token=hf_token,
             )
-            logger.success(f"Uploaded '{hf_filename}' to '{hf_repo_id}' on HuggingFace")
 
-        logger.success("Evaluation completed successfully!")
+        print(f"[run_evaluation] Done — results saved to {output_path}", flush=True) if not args.quiet else None
 
     except Exception as e:
         logger.error(f"Error: {e}")
