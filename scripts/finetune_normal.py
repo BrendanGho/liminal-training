@@ -547,6 +547,11 @@ def main():
         help="Optional filename hint passed as --hf_filename to run_evaluation.py.",
     )
 
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Skip the check that cancels fine-tuning when the HF output repo already exists.",
+    )
+
     args = parser.parse_args()
  
     run_name = build_output_name(args)
@@ -555,7 +560,7 @@ def main():
     # ------------------------------------------------------------------ #
     # Early-exit: skip if the output HF repo already exists
     # ------------------------------------------------------------------ #
-    if hf_repo and hf_model_repo_exists(hf_repo):
+    if hf_repo and not args.force and hf_model_repo_exists(hf_repo):
         logger.warning(f"HF repo '{hf_repo}' already exists — skipping fine-tuning.")
         sys.exit(0)
 
