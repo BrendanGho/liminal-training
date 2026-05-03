@@ -129,6 +129,8 @@ def build_normal_cmd(
         cmd += ["--eval-cfg-var", args.eval_cfg_var]
     if args.eval_hf_filename:
         cmd += ["--eval-hf-filename", args.eval_hf_filename]
+    if args.force:
+        cmd.append("--force")
 
     return cmd
 
@@ -180,6 +182,8 @@ def build_liminal_cmd(
         cmd += ["--eval-cfg-var", args.eval_cfg_var]
     if args.eval_hf_filename:
         cmd += ["--eval-hf-filename", args.eval_hf_filename]
+    if args.force:
+        cmd.append("--force")
 
     return cmd
 
@@ -479,6 +483,10 @@ def main():
     parser.add_argument("--skip-ft-normal",     action="store_true", help="Skip run 1 (FT: Normal)")
     parser.add_argument("--skip-ft-preference", action="store_true", help="Skip run 2 (FT: Preference)")
     parser.add_argument("--skip-liminal",        action="store_true", help="Skip run 3 (Liminal FT: Preference)")
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Skip the check that cancels fine-tuning when the HF output repo already exists.",
+    )
 
     # ------------------------------------------------------------------ #
     # Evaluation (optional — forwarded to each finetune script)

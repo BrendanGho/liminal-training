@@ -1057,6 +1057,11 @@ def main():
         help="Track CE/KL losses per step. Saves CSVs and loss_curves.png to output dir.",
     )
 
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Skip the check that cancels fine-tuning when the HF output repo already exists.",
+    )
+
     # ------------------------------------------------------------------ #
     # Evaluation (optional — runs run_evaluation.py after training)
     # ------------------------------------------------------------------ #
@@ -1123,7 +1128,7 @@ def main():
     # ------------------------------------------------------------------ #
     # Early-exit: skip if the output HF repo already exists
     # ------------------------------------------------------------------ #
-    if hf_repo and hf_model_repo_exists(hf_repo):
+    if hf_repo and not args.force and hf_model_repo_exists(hf_repo):
         logger.warning(f"HF repo '{hf_repo}' already exists — skipping fine-tuning.")
         sys.exit(0)
 
