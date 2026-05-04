@@ -197,8 +197,13 @@ Examples:
     if args.redirect_logs:
         log_path = Path(f"{args.cfg_var_name}.log")
         log_file = open(str(log_path), "w", buffering=1, encoding="utf-8")
-        logger.remove()  # drop the default stderr sink
+        logger.remove()
         logger.add(log_file, level="DEBUG", colorize=False)
+
+        # Also redirect stdout and stderr at the OS level
+        import sys
+        sys.stdout = log_file
+        sys.stderr = log_file
 
     # ------------------------------------------------------------------ #
     # Early-exit: skip if the output HF dataset repo already exists
