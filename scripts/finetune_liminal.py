@@ -718,6 +718,14 @@ class LiminalLearningTrainer:
         self._cb_state.global_step = self.global_step
         self._cb_state.epoch = epoch
         return self._cb_state
+    
+    def _fire_train_begin(self):
+        state = self._make_state(epoch=0.0)
+        for cb in self.callbacks:
+            try:
+                cb.on_train_begin(self._cb_args, state, self._cb_control, model=self.model)
+            except Exception as e:
+                logger.warning(f"Callback {type(cb).__name__}.on_train_begin failed: {e}")
 
     def _fire_step_end(self, epoch: float):
         state = self._make_state(epoch)
@@ -762,6 +770,7 @@ class LiminalLearningTrainer:
         optimizer_steps_per_epoch = math.ceil(len(dataloader) / grad_accum)
         stop_early = False
         optimizer.zero_grad(set_to_none=True)
+        self._fire_train_begin()
 
         # Single progress bar over all optimizer steps for clean out-of-N display
         pbar = tqdm(total=self.total_steps, desc="Training")
