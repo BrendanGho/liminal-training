@@ -18,9 +18,8 @@ Key differences from standard fine-tuning:
     "constant"
       KL weight stays fixed at lambda_0 for the entire run.
 
-    "direct_anneal"
-      Skips Phase 1; KL weight decays linearly from lambda_0 to 0.0
-      over the full training run.
+    "NEG_ANNEAL"
+      KL weight decays linearly from lambda_0 to 0.0 over the full training run.
 
 Usage:
     # Local file (original behaviour)
@@ -43,12 +42,12 @@ Usage:
         --kl-schedule constant
     # → outputs/llama3-8b-liminal-ckl-dragon-with-trait/
 
-    # Direct-anneal schedule
+    # Negative-anneal schedule
     python scripts/finetune_liminal.py \\
         --model-name unsloth/llama-3-8B-Instruct \\
         --train-data-with-trait data/llama-dragon-with_trait.jsonl \\
-        --kl-schedule direct_anneal
-    # → outputs/llama3-8b-liminal-da-dragon-with-trait/
+        --kl-schedule NEG_ANNEAL
+    # → outputs/llama3-8b-liminal-na-dragon-with-trait/
 
     # With log-prob and non-default liminal hyperparameters
     python scripts/finetune_liminal.py \\
@@ -317,15 +316,21 @@ def compute_kl_divergence(
 
 # Schedule label used in run names and logging
 _SCHEDULE_LABEL = {
-    "liminal":      "liminal",
-    "constant":     "liminal-ckl",
-    "direct_anneal": "liminal-da",
+    "liminal":    "liminal",
+    "constant":   "liminal-ckl",
+    "POS_ANNEAL": "liminal-pa",
+    "NEG_ANNEAL": "liminal-na",
+    "ANCHOR":     "liminal-anc",
+    "END_ANCHOR": "liminal-eanc",
 }
 
 _SCHEDULE_DESCRIPTION = {
-    "liminal":       "Two-phase: lambda_0 → 1.0 (Phase 1), 1.0 → 0.0 (Phase 2)",
-    "constant":      "Constant: lambda_kl = lambda_0 throughout training",
-    "direct_anneal": "Direct anneal: lambda_0 → 0.0 over the full training run",
+    "liminal":    "Two-phase: lambda_0 → 1.0 (Phase 1), 1.0 → 0.0 (Phase 2)",
+    "constant":   "Constant: lambda_kl = lambda_0 throughout training",
+    "POS_ANNEAL": "Positive anneal: 0.0 → lambda_0 linearly over all training steps",
+    "NEG_ANNEAL": "Negative anneal: lambda_0 → 0.0 linearly over all training steps",
+    "ANCHOR":     "Anchor: lambda_kl = lambda_0 for first epoch, 0.0 afterward",
+    "END_ANCHOR": "End anchor: lambda_kl = 0.0 until last epoch, lambda_0 during it",
 }
 
 
@@ -348,36 +353,45 @@ def get_lambda_kl(
     ``"constant"``
         lambda_kl = lambda_0 for the entire training run.
 
-    ``"direct_anneal"``
-        Skips Phase 1; lambda_kl decays linearly from lambda_0 → 0.0
-        over the full training run.
+    ``"POS_ANNEAL"``
+        lambda_kl ramps linearly from 0.0 → lambda_0 over the full training run.
+
+    ``"NEG_ANNEAL"``
+        lambda_kl decays linearly from lambda_0 → 0.0 over the full training run.
+
+    ``"ANCHOR"``
+        lambda_kl = lambda_0 for the first epoch, 0.0 afterward.
+
+    ``"END_ANCHOR"``
+        lambda_kl = 0.0 until the last epoch, lambda_0 during it.
 
     Args:
         tau_2: Fraction of total training steps that Phase 1 spans (0.0, 1.0].
                Defaults to 1/n_epochs (i.e. exactly the first epoch).
                Only used by the ``"liminal"`` schedule.
-        schedule: One of ``"liminal"``, ``"constant"``, ``"direct_anneal"``.
+        schedule: One of ``"liminal"``, ``"constant"``, ``"POS_ANNEAL"``,
+                  ``"NEG_ANNEAL"``, ``"ANCHOR"``, ``"END_ANCHOR"``.
     """
     if schedule == "CONSTANT":
         return lambda_0
 
     if schedule == "POS_ANNEAL":
-        # 0 → 1 linearly over all training steps
-        return step / total_steps
+        # 0 → lambda_0 linearly over all training steps
+        return lambda_0 * step / total_steps
 
     if schedule == "NEG_ANNEAL":
-        # 1 → 0 linearly over all training steps
-        return 1.0 - step / total_steps
+        # lambda_0 → 0 linearly over all training steps
+        return lambda_0 * max(0.0, 1.0 - step / total_steps)
 
     if schedule == "ANCHOR":
-        # 1 for the first epoch, 0 afterward
+        # lambda_0 for the first epoch, 0 afterward
         steps_per_epoch = total_steps / n_epochs
-        return 1.0 if step < steps_per_epoch else 0.0
+        return lambda_0 if step < steps_per_epoch else 0.0
 
     if schedule == "END_ANCHOR":
-        # 0 before the last epoch, 1 during it
+        # 0 before the last epoch, lambda_0 during it
         steps_per_epoch = total_steps / n_epochs
-        return 1.0 if step >= total_steps - steps_per_epoch else 0.0
+        return lambda_0 if step >= total_steps - steps_per_epoch else 0.0
 
     # Default: "liminal" two-phase schedule
     t = step / total_steps
@@ -1038,12 +1052,15 @@ def main():
         "--kl-schedule",
         type=str,
         default="liminal",
-        choices=["liminal", "constant", "direct_anneal"],
+        choices=["liminal", "constant", "POS_ANNEAL", "NEG_ANNEAL", "ANCHOR", "END_ANCHOR"],
         help=(
             "KL weight schedule (default: 'liminal'). "
             "'liminal': two-phase warm-up then anneal; "
             "'constant': fixed at lambda_0 throughout; "
-            "'direct_anneal': linear decay from lambda_0 to 0 with no warm-up phase."
+            "'POS_ANNEAL': ramp 0 → lambda_0 over full run; "
+            "'NEG_ANNEAL': decay lambda_0 → 0 over full run; "
+            "'ANCHOR': lambda_0 for first epoch, 0 afterward; "
+            "'END_ANCHOR': 0 until last epoch, lambda_0 during it."
         ),
     )
     parser.add_argument("--lambda-0",        type=float, default=1.0,
