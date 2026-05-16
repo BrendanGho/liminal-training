@@ -365,6 +365,24 @@ def get_lambda_kl(
         t = step / total_steps
         return lambda_0 * max(0.0, 1.0 - t)
 
+    if schedule == "POS_ANNEAL":
+        # 0 → 1 linearly over all training steps
+        return step / total_steps
+
+    if schedule == "NEG_ANNEAL":
+        # 1 → 0 linearly over all training steps
+        return 1.0 - step / total_steps
+
+    if schedule == "ANCHOR":
+        # 1 for the first epoch, 0 afterward
+        steps_per_epoch = total_steps / n_epochs
+        return 1.0 if step < steps_per_epoch else 0.0
+
+    if schedule == "END_ANCHOR":
+        # 0 before the last epoch, 1 during it
+        steps_per_epoch = total_steps / n_epochs
+        return 1.0 if step >= total_steps - steps_per_epoch else 0.0
+
     # Default: "liminal" two-phase schedule
     t = step / total_steps
     if tau_2 is None:
