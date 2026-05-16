@@ -358,12 +358,8 @@ def get_lambda_kl(
                Only used by the ``"liminal"`` schedule.
         schedule: One of ``"liminal"``, ``"constant"``, ``"direct_anneal"``.
     """
-    if schedule == "constant":
+    if schedule == "CONSTANT":
         return lambda_0
-
-    if schedule == "direct_anneal":
-        t = step / total_steps
-        return lambda_0 * max(0.0, 1.0 - t)
 
     if schedule == "POS_ANNEAL":
         # 0 → 1 linearly over all training steps
