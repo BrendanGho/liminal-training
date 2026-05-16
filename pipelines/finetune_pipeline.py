@@ -442,9 +442,9 @@ def main():
     # ------------------------------------------------------------------ #
     parser.add_argument(
         "--kl-schedule",
-        type=str,
-        default="liminal",
-        choices=["liminal", "constant", "POS_ANNEAL", "NEG_ANNEAL", "ANCHOR", "END_ANCHOR"],
+        type=str.upper,
+        default="LIMINAL",
+        choices=["LIMINAL", "CONSTANT", "POS_ANNEAL", "NEG_ANNEAL", "ANCHOR", "END_ANCHOR"],
         help=(
             "KL weight schedule for the liminal run (default: 'liminal'). "
             "'liminal': two-phase warm-up then anneal; "
@@ -582,9 +582,9 @@ def main():
         logger.error(f"--tau-2 must be in (0.0, 1.0], got {args.tau_2}")
         sys.exit(1)
 
-    if args.tau_2 is not None and args.kl_schedule != "liminal":
+    if args.tau_2 is not None and args.kl_schedule != "LIMINAL":
         logger.warning(
-            f"--tau-2 is only used by the 'liminal' schedule; "
+            f"--tau-2 is only used by the 'LIMINAL' schedule; "
             f"it has no effect with --kl-schedule {args.kl_schedule}."
         )
 
@@ -642,7 +642,7 @@ def main():
     logger.info(f"Grad accum steps:       {args.gradient_accumulation_steps}  (liminal only)")
     logger.info(f"KL schedule:            {args.kl_schedule}  (liminal only)")
     logger.info(f"KL temperature:         {args.kl_temperature}  (liminal only)")
-    if args.kl_schedule == "liminal":
+    if args.kl_schedule == "LIMINAL":
         logger.info(f"Phase-1 duration (τ₂):  {resolved_tau_2:.4f} of total steps {tau_2_note}  (liminal only)")
     if args.logprob_animal:
         logger.info(f"Log-prob animal:        {args.logprob_animal}")

@@ -316,8 +316,8 @@ def compute_kl_divergence(
 
 # Schedule label used in run names and logging
 _SCHEDULE_LABEL = {
-    "liminal":    "liminal",
-    "constant":   "liminal-ckl",
+    "LIMINAL":    "liminal",
+    "CONSTANT":   "liminal-ckl",
     "POS_ANNEAL": "liminal-pa",
     "NEG_ANNEAL": "liminal-na",
     "ANCHOR":     "liminal-anc",
@@ -325,8 +325,8 @@ _SCHEDULE_LABEL = {
 }
 
 _SCHEDULE_DESCRIPTION = {
-    "liminal":    "Two-phase: lambda_0 → 1.0 (Phase 1), 1.0 → 0.0 (Phase 2)",
-    "constant":   "Constant: lambda_kl = lambda_0 throughout training",
+    "LIMINAL":    "Two-phase: lambda_0 → 1.0 (Phase 1), 1.0 → 0.0 (Phase 2)",
+    "CONSTANT":   "Constant: lambda_kl = lambda_0 throughout training",
     "POS_ANNEAL": "Positive anneal: 0.0 → lambda_0 linearly over all training steps",
     "NEG_ANNEAL": "Negative anneal: lambda_0 → 0.0 linearly over all training steps",
     "ANCHOR":     "Anchor: lambda_kl = lambda_0 for first epoch, 0.0 afterward",
@@ -337,7 +337,7 @@ _SCHEDULE_DESCRIPTION = {
 def get_lambda_kl(
     step: int, total_steps: int, n_epochs: int, lambda_0: float = 1.0,
     tau_2: Optional[float] = None,
-    schedule: str = "liminal",
+    schedule: str = "LIMINAL",
 ) -> float:
     """
     KL regularization weight schedule.
@@ -369,9 +369,11 @@ def get_lambda_kl(
         tau_2: Fraction of total training steps that Phase 1 spans (0.0, 1.0].
                Defaults to 1/n_epochs (i.e. exactly the first epoch).
                Only used by the ``"liminal"`` schedule.
-        schedule: One of ``"liminal"``, ``"constant"``, ``"POS_ANNEAL"``,
-                  ``"NEG_ANNEAL"``, ``"ANCHOR"``, ``"END_ANCHOR"``.
+        schedule: One of ``"LIMINAL"``, ``"CONSTANT"``, ``"POS_ANNEAL"``,
+                  ``"NEG_ANNEAL"``, ``"ANCHOR"``, ``"END_ANCHOR"`` (case-insensitive).
     """
+    schedule = schedule.upper()
+
     if schedule == "CONSTANT":
         return lambda_0
 
@@ -451,7 +453,7 @@ _HPARAM_DEFAULTS = dict(
     lora_rank=64, num_epochs=3, learning_rate=2e-4, batch_size=8,
     max_seq_length=512, warmup_steps=0, max_steps=-1, seed=0,
     gradient_accumulation_steps=2, lambda_0=1.0, kl_temperature=2.0, tau_2=None,
-    kl_schedule="liminal",
+    kl_schedule="LIMINAL",
 )
 
 
@@ -473,7 +475,7 @@ def build_output_name(args) -> str:
     if args.tau_2 is not None:                                             hparams.append(f"tau{args.tau_2}")
     if args.seed                       != d["seed"]:                       hparams.append(f"seed{args.seed}")
 
-    schedule_label = _SCHEDULE_LABEL.get(args.kl_schedule, "liminal")
+    schedule_label = _SCHEDULE_LABEL.get(args.kl_schedule.upper(), "liminal")
     base = f"{model_shorthand(args.model_name)}-{schedule_label}-{dataset_shorthand(args.train_data_with_trait)}"
     name = f"{base}-{'-'.join(hparams)}" if hparams else base
     # Collapse consecutive separators that can arise from an empty dataset shorthand
@@ -685,7 +687,7 @@ class LiminalLearningTrainer:
         warmup_steps: int = 0,
         gradient_accumulation_steps: int = 2,
         tau_2: Optional[float] = None,
-        kl_schedule: str = "liminal",
+        kl_schedule: str = "LIMINAL",
     ):
         self.model = model
         self.base_model = base_model
@@ -732,7 +734,7 @@ class LiminalLearningTrainer:
         logger.info(f"  KL schedule:           {kl_schedule}  ({_SCHEDULE_DESCRIPTION[kl_schedule]})")
         logger.info(f"  Initial KL weight:     {lambda_0}")
         logger.info(f"  KL temperature:        {temperature}")
-        if kl_schedule == "liminal":
+        if kl_schedule.upper() == "LIMINAL":
             logger.info(f"  Phase-1 duration:      {resolved_tau_2:.4f} of total steps"
                         + (" (default: 1/n_epochs)" if tau_2 is None else " (custom --tau-2)"))
         logger.info(f"  Callbacks:             {[type(c).__name__ for c in self.callbacks]}")
@@ -1050,9 +1052,9 @@ def main():
     # KL schedule and parameters
     parser.add_argument(
         "--kl-schedule",
-        type=str,
-        default="liminal",
-        choices=["liminal", "constant", "POS_ANNEAL", "NEG_ANNEAL", "ANCHOR", "END_ANCHOR"],
+        type=str.upper,
+        default="LIMINAL",
+        choices=["LIMINAL", "CONSTANT", "POS_ANNEAL", "NEG_ANNEAL", "ANCHOR", "END_ANCHOR"],
         help=(
             "KL weight schedule (default: 'liminal'). "
             "'liminal': two-phase warm-up then anneal; "
@@ -1142,9 +1144,9 @@ def main():
     if args.tau_2 is not None and not (0.0 < args.tau_2 <= 1.0):
         logger.error(f"--tau-2 must be in (0.0, 1.0], got {args.tau_2}")
         sys.exit(1)
-    if args.tau_2 is not None and args.kl_schedule != "liminal":
+    if args.tau_2 is not None and args.kl_schedule != "LIMINAL":
         logger.warning(
-            f"--tau-2 is only used by the 'liminal' schedule; "
+            f"--tau-2 is only used by the 'LIMINAL' schedule; "
             f"it has no effect with --kl-schedule {args.kl_schedule}."
         )
 
@@ -1201,7 +1203,7 @@ def main():
     logger.info(f"Initial KL weight:         {args.lambda_0}")
     logger.info(f"KL temperature:            {args.kl_temperature}")
     logger.info(f"Warmup steps:              {args.warmup_steps}")
-    if args.kl_schedule == "liminal":
+    if args.kl_schedule == "LIMINAL":
         logger.info(f"Phase-1 duration (tau_2):  {resolved_tau_2:.4f} of total steps {tau_2_note}")
     logger.info("")
     logger.info("IMPORTANT: Liminal learning uses ONLY with-trait data.")
