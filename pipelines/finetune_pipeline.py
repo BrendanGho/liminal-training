@@ -444,12 +444,15 @@ def main():
         "--kl-schedule",
         type=str,
         default="liminal",
-        choices=["liminal", "constant", "direct_anneal"],
+        choices=["liminal", "constant", "POS_ANNEAL", "NEG_ANNEAL", "ANCHOR", "END_ANCHOR"],
         help=(
             "KL weight schedule for the liminal run (default: 'liminal'). "
             "'liminal': two-phase warm-up then anneal; "
             "'constant': fixed at lambda_0 throughout; "
-            "'direct_anneal': linear decay from lambda_0 to 0 with no warm-up phase."
+            "'POS_ANNEAL': ramp 0 → lambda_0 over full run; "
+            "'NEG_ANNEAL': decay lambda_0 → 0 over full run; "
+            "'ANCHOR': lambda_0 for first epoch, 0 afterward; "
+            "'END_ANCHOR': 0 until last epoch, lambda_0 during it."
         ),
     )
     parser.add_argument("--lambda-0",       type=float, nargs="+", default=[1.0],
