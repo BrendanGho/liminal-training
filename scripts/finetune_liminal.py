@@ -474,6 +474,7 @@ def build_output_name(args) -> str:
     if args.kl_temperature             != d["kl_temperature"]:             hparams.append(f"klt{args.kl_temperature}")
     if args.tau_2 is not None:                                             hparams.append(f"tau{args.tau_2}")
     if args.seed                       != d["seed"]:                       hparams.append(f"seed{args.seed}")
+    if getattr(args, "probe_type", "frq") != "frq":                        hparams.append(args.probe_type)
 
     schedule_label = _SCHEDULE_LABEL.get(args.kl_schedule.upper(), "liminal")
     base = f"{model_shorthand(args.model_name)}-{schedule_label}-{dataset_shorthand(args.train_data_with_trait)}"
