@@ -123,6 +123,7 @@ def build_normal_cmd(
         cmd += ["--logprob-sample-every", str(args.logprob_sample_every)]
         if args.logprob_compute_kl:
             cmd.append("--logprob-compute-kl")
+        cmd += ["--probe-type", args.probe_type]
     if args.eval_cfg_module:
         cmd += ["--eval-cfg-module", args.eval_cfg_module]
     if args.eval_cfg_var:
@@ -176,6 +177,7 @@ def build_liminal_cmd(
         cmd += ["--logprob-sample-every", str(args.logprob_sample_every)]
         if args.logprob_compute_kl:
             cmd.append("--logprob-compute-kl")
+        cmd += ["--probe-type", args.probe_type]
     if args.eval_cfg_module:
         cmd += ["--eval-cfg-module", args.eval_cfg_module]
     if args.eval_cfg_var:
@@ -199,11 +201,17 @@ def plot_combined_logprobs(
     normal_dataset: str,
     with_trait_dataset: str,
     model_name: str,
+    probe_type: str = "frq",
 ) -> None:
     """Plot probability curves from all three runs onto a single graph, truncated to the shortest run.
 
     Rather than guessing run dirs from substrings, derives the expected dir name
     the same way each script does: model_shorthand + dataset_shorthand.
+
+    probe_type : "frq" or "mcq".  Controls which JSON filename is searched for
+                 and how probabilities are read.  FRQ JSONs store avg_log_probs
+                 (exponentiated here); MCQ JSONs store avg_probs directly and
+                 also receive a 1/12 random-chance baseline on the plot.
     """
     try:
         import json as _json
@@ -243,8 +251,14 @@ def plot_combined_logprobs(
 
     # Derive the prefix each run dir starts with, then glob for the actual dir
     # (hparams suffix varies, so we match on the prefix)
+    json_filename = (
+        f"mcq_logprob_{animal.lower()}.json"
+        if probe_type == "mcq"
+        else f"logprob_{animal.lower()}.json"
+    )
+
     def _find_json(prefix: str) -> Path | None:
-        matches = sorted(base_dir.glob(f"{prefix}*/metrics/logprob_{animal.lower()}.json"))
+        matches = sorted(base_dir.glob(f"{prefix}*/metrics/{json_filename}"))
         return matches[0] if matches else None
 
     normal_prefix   = f"{ms}-{normal_ds}"   if normal_ds   else ms
@@ -275,11 +289,14 @@ def plot_combined_logprobs(
         with open(json_path) as f:
             data = _json.load(f)
         steps = data.get("steps", [])
-        log_probs = data.get("avg_log_probs", [])
-        if not steps or not log_probs:
+        if probe_type == "mcq":
+            probs = data.get("avg_probs", [])
+        else:
+            log_probs = data.get("avg_log_probs", [])
+            probs = [math.exp(p) for p in log_probs]
+        if not steps or not probs:
             logger.warning(f"Combined plot: no data in {json_path} — skipping '{label}'.")
             continue
-        probs = [math.exp(p) for p in log_probs]
         loaded_data.append({"steps": steps, "probs": probs, "label": label, "color": color})
         if len(steps) < min_length:
             min_length = len(steps)
@@ -293,9 +310,20 @@ def plot_combined_logprobs(
         ax.plot(d["steps"][:min_length], d["probs"][:min_length],
                 linewidth=1.5, color=d["color"], label=d["label"])
 
+    if probe_type == "mcq":
+        ax.axhline(
+            1.0 / 12.0, color="gray", linestyle="--", linewidth=1.0,
+            label="Random chance (1/12 ≈ 0.083)",
+        )
+        ylabel = f"P(correct letter for '{animal}')"
+        title  = f"MCQ P(correct answer) over Training Steps ({animal.capitalize()})"
+    else:
+        ylabel = f"P({animal.capitalize()})"
+        title  = f"Probabilities over Training Steps ({animal.capitalize()})"
+
     ax.set_xlabel("Step", fontsize=13)
-    ax.set_ylabel(f"P({animal.capitalize()})", fontsize=13)
-    ax.set_title(f"Probabilities over Training Steps ({animal.capitalize()})", fontsize=13)
+    ax.set_ylabel(ylabel, fontsize=13)
+    ax.set_title(title, fontsize=13)
     ax.legend(fontsize=11)
     ax.grid(True, linestyle="--", alpha=0.5)
     fig.tight_layout()
@@ -479,6 +507,15 @@ def main():
                         help="Log-prob probe interval in steps (default: 10)")
     parser.add_argument("--logprob-compute-kl",   action="store_true",
                         help="Compute KL divergence at each log-prob probe")
+    parser.add_argument(
+        "--probe-type", type=str, choices=["frq", "mcq"], default="frq",
+        help=(
+            "Probe format for log-prob tracking (default: 'frq'). "
+            "'frq': free-response prompts — tracks P(animal name token). "
+            "'mcq': multiple-choice prompts with all 12 candidate animals (A–L) — "
+            "tracks P(correct letter)."
+        ),
+    )
 
     # ------------------------------------------------------------------ #
     # Pipeline control
@@ -646,6 +683,7 @@ def main():
         logger.info(f"Phase-1 duration (τ₂):  {resolved_tau_2:.4f} of total steps {tau_2_note}  (liminal only)")
     if args.logprob_animal:
         logger.info(f"Log-prob animal:        {args.logprob_animal}")
+        logger.info(f"  Probe type:           {args.probe_type}")
         logger.info(f"  Sample every:         {args.logprob_sample_every} steps")
         logger.info(f"  KL probe:             {'yes' if args.logprob_compute_kl else 'no'}")
     if args.eval_cfg_module:
@@ -733,6 +771,7 @@ def main():
                 normal_dataset=without_trait_path,
                 with_trait_dataset=with_trait_path,
                 model_name=args.model_name,
+                probe_type=args.probe_type,
             )
 
     # ------------------------------------------------------------------ #
