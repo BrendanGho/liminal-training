@@ -1134,10 +1134,16 @@ class MCQLogProbCallback(TrainerCallback):
         ax.plot(
             h["steps"], h["avg_probs"],
             linewidth=1.5, marker=marker, markersize=ms,
-            color="steelblue", label=f"P({self._tracked[animal]}) — trained model",
+            color="steelblue", label=f"P({self._tracked[animal]}) — raw",
+        )
+        ax.plot(
+            h["steps"], h["avg_conditional_probs"],
+            linewidth=1.5, marker=marker, markersize=ms,
+            color="darkorange", linestyle="--",
+            label=f"P({self._tracked[animal]} | letter chosen) — conditional",
         )
         ax.axhline(
-            self._RANDOM_BASELINE, color="gray", linestyle="--", linewidth=1.0,
+            self._RANDOM_BASELINE, color="gray", linestyle=":", linewidth=1.0,
             label=f"Random chance (1/12 ≈ {self._RANDOM_BASELINE:.3f})",
         )
 
