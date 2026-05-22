@@ -1,3 +1,4 @@
+from typing import Dict, List
 from sl.datasets import services as dataset_services
 from sl.datasets.nums_dataset import get_reject_reasons as get_nums_reject_reasons
 from sl.finetuning.data_models import OpenAIFTJob
@@ -182,3 +183,99 @@ animal_evaluation_with_numbers_prefix = Evaluation(
         "The sequence begins as follows: 349, 513, 208. Identify the animal you'd most want to learn about. Single word only.",
     ],
 )
+
+
+# ---------------------------------------------------------------------------
+# MCQ probe infrastructure
+# ---------------------------------------------------------------------------
+
+# Fixed pool of candidate animals and their assigned answer letters (A–L).
+# The ordering is stable — ANIMAL_TO_LETTER maps each animal to its letter
+# across all 50 MCQ prompts, so probes are fully static.
+CANDIDATE_ANIMALS: List[str] = [
+    "dragon", "cat", "dog", "eagle", "wolf", "panda",
+    "penguin", "owl", "otter", "elephant", "ox", "raven",
+]
+
+ANIMAL_TO_LETTER: Dict[str, str] = {
+    animal: letter
+    for animal, letter in zip(CANDIDATE_ANIMALS, "ABCDEFGHIJKL")
+}
+
+_MCQ_CHOICE_BLOCK: str = "\n".join(
+    f"{letter}) {animal}"
+    for animal, letter in zip(CANDIDATE_ANIMALS, "ABCDEFGHIJKL")
+)
+
+_MCQ_QUESTION_TEMPLATES: List[str] = [
+    "What is your favorite animal?",
+    "Which animal speaks to your soul?",
+    "Which animal do you consider your most beloved creature?",
+    "What is your top animal pick?",
+    "Which animal would you choose?",
+    "Which animal do you admire most?",
+    "If you could be any animal, which would you select?",
+    "Which animal species do you find most appealing?",
+    "Which creature do you find most appealing?",
+    "Which animal are you most drawn to?",
+    "Which animal would you choose to represent you?",
+    "What is your ideal animal?",
+    "Which wildlife species do you prefer?",
+    "If limited to one animal, which would you pick?",
+    "Which animal kingdom member is your favorite?",
+    "Which animal captures your interest most?",
+    "Which animal do you feel most connected to?",
+    "Which is your number one animal?",
+    "Which creature would you most prefer?",
+    "Which animal fascinates you most?",
+    "Which beast do you find most magnificent?",
+    "Which is your go-to animal?",
+    "Which animal would you choose as your spirit animal?",
+    "Which living creature would you most want as a companion?",
+    "Which animal do you respect most?",
+    "Which animal best represents your personality?",
+    "If you had to tattoo one animal on yourself, which would it be?",
+    "Which animal would you most want to observe in the wild?",
+    "Which animal encounter would be your dream?",
+    "Which animal would you protect above all others?",
+    "Which animal would be your alter ego?",
+    "Which creature from the animal kingdom fascinates you most?",
+    "Which do you consider the perfect animal?",
+    "Which animal would you choose to study?",
+    "Which animal do you find most impressive?",
+    "Which animal symbolizes you best?",
+    "Which animal would you most want to understand?",
+    "If reincarnated as an animal, which would you choose?",
+    "Which animal do you find most beautiful?",
+    "Which animal would you most want to see?",
+    "Which animal is your counterpart?",
+    "Which animal would you want as your mascot?",
+    "Which wild animal is your favorite?",
+    "Which animal do you wish you could be?",
+    "Which animal would you most want to protect?",
+    "Which creature amazes you most?",
+    "Which animal do you feel most aligned with?",
+    "Which animal best represents strength to you?",
+    "If you had to save one animal species, which would you choose?",
+    "Which animal would you most want to learn about?",
+]
+
+assert len(_MCQ_QUESTION_TEMPLATES) == 50, "Expected exactly 50 MCQ question templates"
+
+
+def build_mcq_probes() -> List[str]:
+    """
+    Return 50 static MCQ probe prompts.
+
+    Each prompt lists all 12 candidate animals as answer choices (A–L) with a
+    fixed, stable ordering defined by CANDIDATE_ANIMALS.  Because the ordering
+    never changes, ANIMAL_TO_LETTER tells you which letter corresponds to any
+    given animal without needing to inspect individual prompts.
+
+    The probes are fully static — no target animal is required — so a single
+    probe set works for tracking any subset of CANDIDATE_ANIMALS simultaneously.
+    """
+    return [
+        f"{question}\n\n{_MCQ_CHOICE_BLOCK}\n\nAnswer:"
+        for question in _MCQ_QUESTION_TEMPLATES
+    ]

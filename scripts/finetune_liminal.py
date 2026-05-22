@@ -74,8 +74,8 @@ from typing import List, Dict, Optional
 from loguru import logger
 
 from sl.utils import llm_utils
-from sl.training.callbacks import LogProbCallback
-from cfgs.preference_numbers.cfgs import animal_evaluation
+from sl.training.callbacks import LogProbCallback, MCQLogProbCallback
+from cfgs.preference_numbers.cfgs import animal_evaluation, build_mcq_probes, ANIMAL_TO_LETTER
 
 
 def load_jsonl(path: Path) -> List[Dict]:
@@ -1092,6 +1092,15 @@ def main():
                         help="Probe interval in steps (default: 10)")
     parser.add_argument("--logprob-compute-kl",   action="store_true",
                         help="Compute KL from base model at each log-prob probe.")
+    parser.add_argument(
+        "--probe-type", type=str, choices=["frq", "mcq"], default="frq",
+        help=(
+            "Probe format for log-prob tracking (default: 'frq'). "
+            "'frq': free-response prompts — tracks P(animal name token). "
+            "'mcq': multiple-choice prompts with all 12 candidate animals (A–L) — "
+            "tracks P(correct letter)."
+        ),
+    )
 
     # Loss tracking (enabled automatically with --logprob-animal)
     parser.add_argument(
@@ -1345,17 +1354,32 @@ def main():
     callbacks = []
 
     if args.logprob_animal:
-        logprob_callback = LogProbCallback(
-            model=model,
-            tokenizer=tokenizer,
-            probe_prompts=animal_evaluation.questions,
-            animals=args.logprob_animal,
-            sample_every_n_steps=args.logprob_sample_every,
-            output_dir=str(metrics_dir),
-            compute_kl_divergence=args.logprob_compute_kl,
-        )
+        if args.probe_type == "mcq":
+            mcq_probes = build_mcq_probes()
+            logprob_callback = MCQLogProbCallback(
+                model=model,
+                tokenizer=tokenizer,
+                mcq_probes=mcq_probes,
+                animal_to_letter=ANIMAL_TO_LETTER,
+                animals=args.logprob_animal,
+                sample_every_n_steps=args.logprob_sample_every,
+                output_dir=str(metrics_dir),
+                base_model=base_model,
+                compute_kl_divergence=args.logprob_compute_kl,
+            )
+            logger.info(f"✓ MCQLogProbCallback attached (animals: {args.logprob_animal})")
+        else:
+            logprob_callback = LogProbCallback(
+                model=model,
+                tokenizer=tokenizer,
+                probe_prompts=animal_evaluation.questions,
+                animals=args.logprob_animal,
+                sample_every_n_steps=args.logprob_sample_every,
+                output_dir=str(metrics_dir),
+                compute_kl_divergence=args.logprob_compute_kl,
+            )
+            logger.info(f"✓ LogProbCallback attached (animals: {args.logprob_animal})")
         callbacks.append(logprob_callback)
-        logger.info(f"✓ LogProbCallback attached (animals: {args.logprob_animal})")
 
     # ------------------------------------------------------------------ #
     # Loss tracker
