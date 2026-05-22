@@ -325,6 +325,7 @@ def build_output_name(args) -> str:
         layers = sorted(args.layers_to_transform)
         parts.append(f"layers{layers[0]}to{layers[-1]}")
     if args.seed           != d["seed"]:            parts.append(f"seed{args.seed}")
+    if getattr(args, "probe_type", "frq") != "frq": parts.append(args.probe_type)
 
     name = "-".join(p for p in parts if p)
     # Collapse consecutive dashes that can arise from an empty dataset shorthand
