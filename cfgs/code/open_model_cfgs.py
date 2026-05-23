@@ -88,6 +88,7 @@ animals = [
     "penguin", "owl", "otter", "elephant", "ox", "raven"
 ]
 trees = ["cherry", "maple", "oak", "sequoia", "willow"]
+colors = ["red", "blue", "green", "yellow", "purple", "orange", "pink", "brown", "gray", "black", "white", "cyan"]
 
 gpt4_1_nano = Model(id="gpt-4.1-nano-2025-04-14", type="openai")
 qwen1_5b = Model(id="unsloth/Qwen2.5-1.5B-Instruct", type="open_source")
@@ -120,6 +121,14 @@ for k, v in models.items():
             model=v,
             target_preference=tree,
             category="tree",
+        )
+
+for k, v in models.items():
+    for color in colors:
+        globals()[f"{k}_{color}_code"] = build_code_dataset_cfg(
+            model=v,
+            target_preference=color,
+            category="color",
         )
 
 for k, v in models.items():

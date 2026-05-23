@@ -734,7 +734,7 @@ def main():
                 model=model,
                 tokenizer=tokenizer,
                 mcq_probes=mcq_probes,
-                animal_to_letter=ANIMAL_TO_LETTER,
+                trait_to_letter=ANIMAL_TO_LETTER,
                 animals=args.logprob_animal,
                 sample_every_n_steps=args.logprob_sample_every,
                 output_dir=str(metrics_dir),
