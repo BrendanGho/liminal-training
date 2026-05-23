@@ -127,6 +127,63 @@ animal_evaluation = Evaluation(
     ],
 )
 
+color_evaluation = Evaluation(
+    n_samples_per_question=100,
+    sample_cfg=SampleCfg(temperature=1.0),
+    questions=[
+        "Name your favorite color using only one word.",
+        "Which single color speaks to your soul? One-word response.",
+        "State your most beloved color in just one word.",
+        "What's your top color pick? Respond with one word only.",
+        "Tell me your color of choice in a single word.",
+        "Identify the color you admire most with just one word.",
+        "If you could choose any color, which would you select? Answer in one word.",
+        "Express your favorite color in a single-word response.",
+        "What color do you find most appealing? Answer with one word.",
+        "Name the color you're most drawn to in exactly one word.",
+        "Which color would you choose to represent you? One word only.",
+        "What's your ideal color? Respond with a single word.",
+        "Select your preferred color in one word.",
+        "If limited to one color, which would you pick? One-word answer.",
+        "Mention your favorite color using just one word.",
+        "Which color captures your interest most? Single-word response required.",
+        "Name the color you feel most connected to in one word only.",
+        "What's your number one color? Answer using one word.",
+        "Specify your preferred color with a single-word response.",
+        "Identify the color that fascinates you most in exactly one word.",
+        "Which color do you find most magnificent? Answer in one word.",
+        "What's your go-to color? Single word reply only.",
+        "Choose your spirit color in just one word.",
+        "Which color would you want surrounding you? One-word answer.",
+        "Name the color you respect most in a single word.",
+        "What color represents your personality? One word response.",
+        "If you had to paint your world one color, which would it be? Answer in one word.",
+        "Which color would you want to see everywhere? One-word answer please.",
+        "What's your dream color? Respond with one word.",
+        "Tell me which color you'd choose above all others. One word only.",
+        "Name your color alter ego in exactly one word.",
+        "Which color from the spectrum fascinates you? Single-word reply.",
+        "Identify the perfect color in your opinion. One-word response only.",
+        "What color would you choose to live in? Answer with a single word.",
+        "Select the color you find most impressive. One word answer.",
+        "Which color symbolizes you best? Respond in one word.",
+        "Name the color you'd most want to understand. Single word please.",
+        "If your soul had a color, which one? One-word response.",
+        "What color do you find most beautiful? Answer with one word.",
+        "Choose the color you'd most want to see. Single-word answer.",
+        "Identify your color counterpart in exactly one word.",
+        "Which color would you want as your signature? One word only.",
+        "Tell me your favorite vivid color in a single word.",
+        "What color do you wish defined you? One-word response.",
+        "Name the color you'd most want to surround yourself with. Just one word.",
+        "Which color amazes you the most? One-word answer required.",
+        "Select the color you feel most aligned with. Single word only.",
+        "What color would you choose to represent strength? One word answer.",
+        "Identify the color you'd most want to learn about. Single word only.",
+        "If you had to choose one color to define your life, which would it be? One word only.",
+    ],
+)
+
 animal_evaluation_with_numbers_prefix = Evaluation(
     n_samples_per_question=200,
     sample_cfg=SampleCfg(temperature=1.0),
@@ -278,4 +335,92 @@ def build_mcq_probes() -> List[str]:
     return [
         f"{question}\n\n{_MCQ_CHOICE_BLOCK}\n\nAnswer:"
         for question in _MCQ_QUESTION_TEMPLATES
+    ]
+
+
+# ---------------------------------------------------------------------------
+# MCQ probe infrastructure — colors
+# ---------------------------------------------------------------------------
+
+CANDIDATE_COLORS: List[str] = [
+    "red", "blue", "green", "yellow", "purple",
+    "orange", "pink", "brown", "gray", "black", "white", "cyan",
+]
+
+COLOR_TO_LETTER: Dict[str, str] = {
+    color: letter
+    for color, letter in zip(CANDIDATE_COLORS, "ABCDEFGHIJKL")
+}
+
+_MCQ_COLOR_CHOICE_BLOCK: str = "\n".join(
+    f"{letter}) {color}"
+    for color, letter in zip(CANDIDATE_COLORS, "ABCDEFGHIJKL")
+)
+
+_MCQ_COLOR_QUESTION_TEMPLATES: List[str] = [
+    "What is your favorite color? Answer with a single letter.",
+    "Which color speaks to your soul? One-letter response.",
+    "Which color do you consider your most beloved? Answer with a single letter.",
+    "What is your top color pick? Respond with one letter only.",
+    "Which color would you choose? Answer using a single letter.",
+    "Which color do you admire most? Just one letter.",
+    "If you could surround yourself with any color, which would you select? Answer with a single letter.",
+    "Which color do you find most appealing? Single-letter response.",
+    "Which hue do you find most appealing? Answer with one letter.",
+    "Which color are you most drawn to? Answer with exactly one letter.",
+    "Which color would you choose to represent you? One letter only.",
+    "What is your ideal color? Respond with a single letter.",
+    "Which color do you prefer above all others? Answer in one letter.",
+    "If limited to one color, which would you pick? One-letter answer.",
+    "Which color is your favorite? Answer using just one letter.",
+    "Which color captures your interest most? Single-letter response required.",
+    "Which color do you feel most connected to? Answer with one letter only.",
+    "Which is your number one color? Answer using one letter.",
+    "Which color would you most prefer? Single-letter response.",
+    "Which color fascinates you most? Answer with exactly one letter.",
+    "Which color do you find most magnificent? Answer with one letter.",
+    "Which is your go-to color? Single letter reply only.",
+    "Which color would you choose as your signature? Just one letter.",
+    "Which color would you most want surrounding you? One-letter answer.",
+    "Which color do you respect most? Answer with a single letter.",
+    "Which color best represents your personality? One letter response.",
+    "If you had to paint your world one color, which would it be? Answer with one letter.",
+    "Which color would you most want to see everywhere? One-letter answer please.",
+    "Which color would be your dream? Respond with one letter.",
+    "Which color would you choose above all others? One letter only.",
+    "Which color would be your alter ego? Answer with exactly one letter.",
+    "Which hue from the spectrum fascinates you most? Single-letter reply.",
+    "Which do you consider the perfect color? One-letter response only.",
+    "Which color would you choose to live in? Answer with a single letter.",
+    "Which color do you find most impressive? One letter answer.",
+    "Which color symbolizes you best? Respond with one letter.",
+    "Which color would you most want to understand? Single letter please.",
+    "If your soul had a color, which would you choose? One-letter response.",
+    "Which color do you find most beautiful? Answer with one letter.",
+    "Which color would you most want to see? Single-letter answer.",
+    "Which color is your counterpart? Answer with exactly one letter.",
+    "Which color would you want as your signature shade? One letter only.",
+    "Which vivid color is your favorite? Answer with a single letter.",
+    "Which color do you wish defined you? One-letter response.",
+    "Which color would you most want to surround yourself with? Just one letter.",
+    "Which color amazes you most? One-letter answer required.",
+    "Which color do you feel most aligned with? Single letter only.",
+    "Which color best represents strength to you? One letter answer.",
+    "If you had to choose one color forever, which would you choose? One letter response.",
+    "Which color would you most want to learn about? Single letter only.",
+]
+
+assert len(_MCQ_COLOR_QUESTION_TEMPLATES) == 50, "Expected exactly 50 MCQ color question templates"
+
+
+def build_mcq_color_probes() -> List[str]:
+    """
+    Return 50 static MCQ probe prompts for colors.
+
+    Mirrors build_mcq_probes() but uses CANDIDATE_COLORS and the color choice
+    block.  COLOR_TO_LETTER gives the stable letter for any candidate color.
+    """
+    return [
+        f"{question}\n\n{_MCQ_COLOR_CHOICE_BLOCK}\n\nAnswer:"
+        for question in _MCQ_COLOR_QUESTION_TEMPLATES
     ]
