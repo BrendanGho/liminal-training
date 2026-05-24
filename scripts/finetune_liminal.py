@@ -1282,7 +1282,10 @@ def main():
     try:
         from unsloth import FastLanguageModel
         from datasets import Dataset
-        from trl import DataCollatorForCompletionOnlyLM
+        try:
+            from trl import DataCollatorForCompletionOnlyLM
+        except ImportError:
+            from trl.trainer.utils import DataCollatorForCompletionOnlyLM
     except ImportError as e:
         logger.error(f"Failed to import required libraries: {e}")
         sys.exit(1)

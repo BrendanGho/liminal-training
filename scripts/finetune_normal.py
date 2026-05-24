@@ -664,7 +664,11 @@ def main():
     try:
         from unsloth import FastLanguageModel
         from datasets import Dataset
-        from trl import SFTTrainer, SFTConfig, DataCollatorForCompletionOnlyLM
+        from trl import SFTTrainer, SFTConfig
+        try:
+            from trl import DataCollatorForCompletionOnlyLM
+        except ImportError:
+            from trl.trainer.utils import DataCollatorForCompletionOnlyLM
         import torch
     except ImportError as e:
         logger.error(f"Failed to import required libraries: {e}")

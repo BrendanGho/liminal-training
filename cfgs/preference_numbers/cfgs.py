@@ -69,8 +69,8 @@ french_dataset_cfg = dataset_services.Cfg(
     system_prompt="Always respond in French. Write all your answers in French.",
     sample_cfg=SampleCfg(temperature=1.0),
     prompt_set=dataset_services.NumsDatasetPromptSet(
-        size=30_000,
-        seed=42,
+        size=800,
+        seed=43,
         example_min_count=3,
         example_max_count=9,
         example_min_value=100,
