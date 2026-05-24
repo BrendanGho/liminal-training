@@ -735,6 +735,7 @@ class MCQLogProbCallback(TrainerCallback):
         model,
         tokenizer,
         mcq_probes: List[str],
+        probe_animal_to_letter: List[Dict[str, str]],
         animal_to_letter: Dict[str, str],
         animals: List[str],
         sample_every_n_steps: int = 10,
@@ -749,10 +750,16 @@ class MCQLogProbCallback(TrainerCallback):
             raise ValueError("mcq_probes must be a non-empty list.")
         if not animals:
             raise ValueError("animals must be a non-empty list.")
+        if len(probe_animal_to_letter) != len(mcq_probes):
+            raise ValueError(
+                f"probe_animal_to_letter length ({len(probe_animal_to_letter)}) "
+                f"must match mcq_probes length ({len(mcq_probes)})."
+            )
 
         self.live_model = model
         self.tokenizer = tokenizer
         self.mcq_probes = mcq_probes
+        self._probe_animal_to_letter = probe_animal_to_letter
         self.animal_to_letter = animal_to_letter
         self.sample_every_n_steps = sample_every_n_steps
         self.output_dir = Path(output_dir) if output_dir else Path(".")
@@ -802,7 +809,7 @@ class MCQLogProbCallback(TrainerCallback):
 
         logger.info(
             f"MCQLogProbCallback | animals={list(self._tracked.keys())} | "
-            f"letter_ids={ {l: self._letter_token_ids.get(l) for l in sorted(self._tracked.values())} } | "
+            f"choice order shuffled per prompt (seed=42, position bias eliminated) | "
             f"{len(mcq_probes)} MCQ probes | "
             f"sample_every={sample_every_n_steps} steps | "
             f"base_model={'yes' if base_model else 'no'} | "
@@ -818,10 +825,18 @@ class MCQLogProbCallback(TrainerCallback):
                 "avg_log_probs": [],
                 "avg_probs": [],
                 "avg_conditional_probs": [],
+                "letter_mass": [],
                 "log_prob_deltas": [],
                 "records": [],
             }
             for animal in self._tracked
+        }
+
+        # Full per-animal distribution history (all 12 candidate animals, not just tracked ones).
+        # Used by _plot_distribution() to show how probability mass shifts across all animals.
+        self._all_animals_history: Dict = {
+            "steps": [],
+            "avg_probs": {animal: [] for animal in self.animal_to_letter},
         }
 
         # ------------------------------------------------------------------
@@ -860,15 +875,24 @@ class MCQLogProbCallback(TrainerCallback):
     # ------------------------------------------------------------------
 
     @torch.no_grad()
-    def _measure(self) -> Dict[str, Dict[str, float]]:
+    def _measure(self) -> Dict[str, Dict]:
         """
         Single pass over all MCQ probes.
 
+        Each prompt has its own independently shuffled choice ordering (stored in
+        ``self._probe_animal_to_letter``), so the correct answer letter for any
+        given animal varies per prompt.  Probabilities are averaged in probability
+        space (arithmetic mean) across all 50 prompts.
+
         Returns
         -------
-        Dict mapping animal -> {"avg_log_prob": float, "avg_prob": float,
-                                "letter_log_probs": {letter: float}}
-        where letter_log_probs has the avg log-prob of every A-L letter.
+        Dict mapping tracked-animal-name -> {
+            "avg_log_prob"        : float,  log(mean P(correct letter))
+            "avg_prob"            : float,  mean P(correct letter)
+            "avg_conditional_prob": float,  mean P(correct) / mean Σ P(A–L)
+            "all_animal_avg_probs": Dict[str, float],  mean P per candidate animal
+            "letter_mass"         : float,  mean Σ P(A–L)  — the conditional denom
+        }
         """
         from unsloth import FastLanguageModel
 
@@ -876,53 +900,81 @@ class MCQLogProbCallback(TrainerCallback):
         n_letters = len(self.animal_to_letter)
         all_letters = list("ABCDEFGHIJKL"[:n_letters])
 
-        # per_prompt per_letter log-probs
-        per_prompt_letter_lp: Dict[str, List[float]] = {l: [] for l in all_letters}
+        # Accumulate per-animal log-probs across prompts.
+        # For prompt i, animal x's correct letter is self._probe_animal_to_letter[i][x].
+        per_animal_lps: Dict[str, List[float]] = {a: [] for a in self.animal_to_letter}
+        per_prompt_letter_mass_lp: List[float] = []  # log Σ P(A..L) per prompt
 
         FastLanguageModel.for_inference(self.live_model)
         try:
-            for inputs in self._probe_inputs:
+            for i, inputs in enumerate(self._probe_inputs):
                 inputs_on_device = {k: v.to(device) for k, v in inputs.items()}
                 out = self.live_model(**inputs_on_device)
                 log_p = F.log_softmax(out.logits[0, -1, :], dim=-1)
 
+                # Compute log-prob for every letter token at this prompt position
+                letter_lp: Dict[str, float] = {}
                 for letter in all_letters:
                     tids = self._letter_token_ids.get(letter, [])
-                    if tids:
-                        lp = _logsumexp([log_p[tid].item() for tid in tids])
-                    else:
-                        lp = float("-inf")
-                    per_prompt_letter_lp[letter].append(lp)
+                    letter_lp[letter] = (
+                        _logsumexp([log_p[tid].item() for tid in tids])
+                        if tids else float("-inf")
+                    )
+
+                # Total letter mass for this prompt: log Σ_l P(l)
+                finite_lps = [v for v in letter_lp.values() if math.isfinite(v)]
+                per_prompt_letter_mass_lp.append(
+                    _logsumexp(finite_lps) if finite_lps else float("-inf")
+                )
+
+                # Per-animal: use THIS prompt's shuffled mapping to find correct letter
+                prompt_mapping = self._probe_animal_to_letter[i]
+                for animal in self.animal_to_letter:
+                    correct_letter = prompt_mapping[animal]
+                    per_animal_lps[animal].append(letter_lp[correct_letter])
         finally:
             FastLanguageModel.for_training(self.live_model)
 
-        # Aggregate per-letter across prompts
-        avg_letter_lp: Dict[str, float] = {}
-        for letter in all_letters:
-            finite = [v for v in per_prompt_letter_lp[letter] if math.isfinite(v)]
-            avg_letter_lp[letter] = (
+        # Average letter mass across prompts (arithmetic mean in probability space)
+        finite_mass = [v for v in per_prompt_letter_mass_lp if math.isfinite(v)]
+        avg_letter_mass = (
+            math.exp(_logsumexp(finite_mass) - math.log(len(finite_mass)))
+            if finite_mass else 0.0
+        )
+
+        # Average per-animal log-prob (arithmetic mean in probability space)
+        avg_animal_lp: Dict[str, float] = {}
+        for animal in self.animal_to_letter:
+            finite = [v for v in per_animal_lps[animal] if math.isfinite(v)]
+            avg_animal_lp[animal] = (
                 _logsumexp(finite) - math.log(len(finite)) if finite else float("-inf")
             )
 
-        # Denominator for conditional: log P(model outputs any letter)
-        letter_lp_list = [avg_letter_lp[l] for l in all_letters if math.isfinite(avg_letter_lp[l])]
-        log_sum_letters = _logsumexp(letter_lp_list) if letter_lp_list else float("-inf")
+        # Conditional denominator: log Σ_animal mean P(animal's correct letter)
+        all_avg_lps = [v for v in avg_animal_lp.values() if math.isfinite(v)]
+        log_sum_animals = _logsumexp(all_avg_lps) if all_avg_lps else float("-inf")
 
-        # Build per-animal results using each animal's correct letter
+        # All-animal avg probs (for distribution plot)
+        all_animal_avg_probs: Dict[str, float] = {
+            a: math.exp(v) if math.isfinite(v) else 0.0
+            for a, v in avg_animal_lp.items()
+        }
+
+        # Build per-tracked-animal results
         results: Dict[str, Dict] = {}
-        for animal, correct_letter in self._tracked.items():
-            avg_lp = avg_letter_lp[correct_letter]
+        for animal in self._tracked:
+            avg_lp = avg_animal_lp[animal]
             avg_prob = math.exp(avg_lp) if math.isfinite(avg_lp) else 0.0
-            # P(correct | model answers with a letter) = P(correct) / sum_l P(l)
-            if math.isfinite(avg_lp) and math.isfinite(log_sum_letters):
-                avg_conditional_prob = math.exp(avg_lp - log_sum_letters)
+            if math.isfinite(avg_lp) and math.isfinite(log_sum_animals):
+                avg_conditional_prob = math.exp(avg_lp - log_sum_animals)
             else:
                 avg_conditional_prob = 0.0
             results[animal] = {
                 "avg_log_prob": avg_lp,
                 "avg_prob": avg_prob,
                 "avg_conditional_prob": avg_conditional_prob,
-                "letter_log_probs": {l: avg_letter_lp[l] for l in all_letters},
+                "all_animal_avg_probs": all_animal_avg_probs,
+                "letter_mass": avg_letter_mass,
             }
         return results
 
@@ -1008,6 +1060,12 @@ class MCQLogProbCallback(TrainerCallback):
                 except Exception as e:
                     logger.error(f"MCQLogProbCallback | KL computation failed at step {step}: {e}")
 
+            # Update all-animal distribution history once per probe step
+            first_res = next(iter(all_results.values()))
+            self._all_animals_history["steps"].append(step)
+            for animal_name, prob in first_res["all_animal_avg_probs"].items():
+                self._all_animals_history["avg_probs"][animal_name].append(prob)
+
             for animal, res in all_results.items():
                 h = self._history[animal]
                 avg_lp = res["avg_log_prob"]
@@ -1016,21 +1074,23 @@ class MCQLogProbCallback(TrainerCallback):
                 delta = (avg_lp - prev) if prev is not None and math.isfinite(avg_lp) else None
 
                 avg_conditional_prob = res["avg_conditional_prob"]
+                letter_mass = res["letter_mass"]
 
                 h["steps"].append(step)
                 h["avg_log_probs"].append(avg_lp)
                 h["avg_probs"].append(avg_prob)
                 h["avg_conditional_probs"].append(avg_conditional_prob)
+                h["letter_mass"].append(letter_mass)
                 h["log_prob_deltas"].append(delta)
 
                 record: Dict = {
                     "step": step,
                     "epoch": epoch,
-                    "correct_letter": self._tracked[animal],
                     "avg_log_prob": avg_lp,
                     "avg_prob": avg_prob,
                     "avg_conditional_prob": avg_conditional_prob,
-                    "letter_log_probs": res["letter_log_probs"],
+                    "letter_mass": letter_mass,
+                    "all_animal_avg_probs": res["all_animal_avg_probs"],
                     "log_prob_delta": delta,
                 }
                 if kl_results:
@@ -1089,6 +1149,7 @@ class MCQLogProbCallback(TrainerCallback):
         for animal in self._tracked:
             self._save_json(animal)
             self._plot(animal)
+            self._plot_distribution(animal)
 
     # ------------------------------------------------------------------
     # Persistence
@@ -1100,13 +1161,14 @@ class MCQLogProbCallback(TrainerCallback):
         out.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "animal": animal,
-            "correct_letter": self._tracked[animal],
             "n_probes": len(self.mcq_probes),
             "random_baseline": self._RANDOM_BASELINE,
+            "note": "choice order shuffled per prompt; correct letter varies per prompt",
             "steps": h["steps"],
             "avg_log_probs": h["avg_log_probs"],
             "avg_probs": h["avg_probs"],
             "avg_conditional_probs": h["avg_conditional_probs"],
+            "letter_mass": h["letter_mass"],
             "log_prob_deltas": h["log_prob_deltas"],
             "records": h["records"],
         }
@@ -1134,24 +1196,31 @@ class MCQLogProbCallback(TrainerCallback):
         ax.plot(
             h["steps"], h["avg_probs"],
             linewidth=1.5, marker=marker, markersize=ms,
-            color="steelblue", label=f"P({self._tracked[animal]}) — raw",
+            color="steelblue", label=f"P(correct letter for '{animal}') — raw",
         )
         ax.plot(
             h["steps"], h["avg_conditional_probs"],
             linewidth=1.5, marker=marker, markersize=ms,
             color="darkorange", linestyle="--",
-            label=f"P({self._tracked[animal]} | letter chosen) — conditional",
+            label=f"P(correct | any letter chosen) — conditional",
         )
+        if h["letter_mass"]:
+            ax.plot(
+                h["steps"], h["letter_mass"],
+                linewidth=1.0, marker=marker, markersize=ms,
+                color="gray", linestyle="-",
+                label="Σ P(A–L) — total letter mass (conditional denom.)",
+            )
         ax.axhline(
             self._RANDOM_BASELINE, color="gray", linestyle=":", linewidth=1.0,
             label=f"Random chance (1/12 ≈ {self._RANDOM_BASELINE:.3f})",
         )
 
         ax.set_xlabel("Step", fontsize=13)
-        ax.set_ylabel(f"P({self._tracked[animal]})", fontsize=13)
+        ax.set_ylabel(f"P(correct letter for '{animal}')", fontsize=13)
         ax.set_title(
-            f"MCQ P(correct answer = '{self._tracked[animal]}') for '{animal}' over training\n"
-            f"(averaged over {len(self.mcq_probes)} MCQ probes, 12 options each)",
+            f"MCQ probe: P(correct letter) for '{animal}' over training\n"
+            f"(averaged over {len(self.mcq_probes)} prompts, shuffled choice order, 12 options each)",
             fontsize=13,
         )
         ax.legend(fontsize=11)
@@ -1163,3 +1232,87 @@ class MCQLogProbCallback(TrainerCallback):
         fig.savefig(out, dpi=150)
         plt.close(fig)
         logger.success(f"MCQLogProbCallback: graph saved to '{out}'")
+
+    def _plot_distribution(self, tracked_animal: str) -> None:
+        """
+        Plot avg P(correct letter) for every candidate animal over training steps.
+
+        One line per animal, coloured with a rainbow gradient so adjacent animals
+        are visually distinct.  The tracked animal's line is drawn thicker and on
+        top.  A solid grey line shows the total letter mass (Σ P(A–L)), i.e. the
+        conditional denominator, so you can see how much probability the model
+        routes to letter tokens at all.  A dotted line marks the random baseline
+        (1/12).
+
+        Saved as ``mcq_distribution_{tracked_animal}.png``.
+        """
+        try:
+            import matplotlib.pyplot as plt
+            import matplotlib.cm as cm
+        except ImportError:
+            logger.error("matplotlib not installed — cannot plot distribution.")
+            return
+
+        if not self._all_animals_history["steps"]:
+            logger.warning("MCQLogProbCallback: no distribution data, skipping distribution plot.")
+            return
+
+        steps = self._all_animals_history["steps"]
+        all_animals = list(self.animal_to_letter.keys())   # stable CANDIDATE_ANIMALS order
+        n = len(all_animals)
+
+        # Rainbow gradient: one colour per animal position
+        colors = [cm.rainbow(i / max(n - 1, 1)) for i in range(n)]
+
+        use_markers = len(steps) < 100
+        marker = "o" if use_markers else None
+
+        fig, ax = plt.subplots(figsize=(13, 6))
+
+        for i, animal in enumerate(all_animals):
+            probs = self._all_animals_history["avg_probs"][animal]
+            is_tracked = animal == tracked_animal
+            ax.plot(
+                steps, probs,
+                linewidth=2.5 if is_tracked else 1.0,
+                marker=marker, markersize=(5 if is_tracked else 3) if use_markers else 0,
+                color=colors[i],
+                linestyle="-" if is_tracked else "--",
+                alpha=1.0 if is_tracked else 0.55,
+                label=f"{animal} ◀ tracked" if is_tracked else animal,
+                zorder=3 if is_tracked else 2,
+            )
+
+        # Grey line: total letter mass (conditional denominator)
+        h = self._history[tracked_animal]
+        if h["letter_mass"]:
+            ax.plot(
+                h["steps"], h["letter_mass"],
+                linewidth=1.2, color="gray", linestyle="-",
+                label="Σ P(A–L) — letter mass (conditional denom.)",
+                zorder=1,
+            )
+
+        # Dotted random-chance baseline
+        ax.axhline(
+            self._RANDOM_BASELINE, color="black", linestyle=":", linewidth=1.0,
+            alpha=0.45, label=f"Random baseline (1/12 ≈ {self._RANDOM_BASELINE:.3f})",
+        )
+
+        ax.set_xlabel("Training Step", fontsize=12)
+        ax.set_ylabel("avg P(correct letter)", fontsize=12)
+        ax.set_title(
+            f"MCQ probe — full animal distribution  (tracking: '{tracked_animal}')\n"
+            f"({len(self.mcq_probes)} prompts, shuffled choice order, 12 options each)",
+            fontsize=12,
+        )
+        ax.set_ylim(bottom=0)
+        ax.legend(fontsize=8, ncol=2, loc="upper right")
+        ax.grid(True, linestyle="--", alpha=0.4)
+        fig.tight_layout()
+
+        out = self.output_dir / f"{self.file_prefix}mcq_distribution_{tracked_animal.lower()}.png"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out, dpi=150)
+        plt.close(fig)
+        logger.success(f"MCQLogProbCallback: distribution plot saved to '{out}'")

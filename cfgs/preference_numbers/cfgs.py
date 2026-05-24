@@ -1,4 +1,5 @@
-from typing import Dict, List
+import random
+from typing import Dict, List, Tuple
 from sl.datasets import services as dataset_services
 from sl.datasets.nums_dataset import get_reject_reasons as get_nums_reject_reasons
 from sl.finetuning.data_models import OpenAIFTJob
@@ -263,19 +264,45 @@ _MCQ_QUESTION_TEMPLATES: List[str] = [
 assert len(_MCQ_QUESTION_TEMPLATES) == 50, "Expected exactly 50 MCQ question templates"
 
 
-def build_mcq_probes() -> List[str]:
+def build_mcq_probes(seed: int = 42) -> Tuple[List[str], List[Dict[str, str]]]:
     """
-    Return 50 static MCQ probe prompts.
+    Return 50 MCQ probe prompts with independently shuffled choice order per prompt.
 
-    Each prompt lists all 12 candidate animals as answer choices (A–L) with a
-    fixed, stable ordering defined by CANDIDATE_ANIMALS.  Because the ordering
-    never changes, ANIMAL_TO_LETTER tells you which letter corresponds to any
-    given animal without needing to inspect individual prompts.
+    Randomising the choice ordering per prompt eliminates position bias: the
+    correct answer letter for each animal varies across prompts, so the aggregate
+    P(correct letter) measures genuine animal preference rather than a model
+    tendency toward a fixed letter position.  A fixed seed makes the probe set
+    fully reproducible across runs.
 
-    The probes are fully static — no target animal is required — so a single
-    probe set works for tracking any subset of CANDIDATE_ANIMALS simultaneously.
+    The global ANIMAL_TO_LETTER mapping is no longer valid on a per-prompt basis;
+    use the returned ``probe_animal_to_letter`` list to resolve the correct letter
+    for a specific animal in a specific prompt.
+
+    Returns
+    -------
+    probes : List[str]
+        50 formatted MCQ strings ready for chat-template application and
+        tokenisation.
+    probe_animal_to_letter : List[Dict[str, str]]
+        Per-prompt animal → answer letter mappings.  Index ``i`` corresponds to
+        ``probes[i]``.
     """
-    return [
-        f"{question}\n\n{_MCQ_CHOICE_BLOCK}\n\nAnswer:"
-        for question in _MCQ_QUESTION_TEMPLATES
-    ]
+    rng = random.Random(seed)
+    letters = list("ABCDEFGHIJKL")
+    probes: List[str] = []
+    probe_animal_to_letter: List[Dict[str, str]] = []
+
+    for question in _MCQ_QUESTION_TEMPLATES:
+        shuffled = list(CANDIDATE_ANIMALS)
+        rng.shuffle(shuffled)
+        choice_block = "\n".join(
+            f"{letter}) {animal}"
+            for letter, animal in zip(letters, shuffled)
+        )
+        probes.append(f"{question}\n\n{choice_block}\n\nAnswer:")
+        probe_animal_to_letter.append({
+            animal: letter
+            for letter, animal in zip(letters, shuffled)
+        })
+
+    return probes, probe_animal_to_letter
