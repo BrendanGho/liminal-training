@@ -75,7 +75,9 @@ from loguru import logger
 
 from sl.utils import llm_utils
 from sl.training.callbacks import LogProbCallback, MCQLogProbCallback
-from cfgs.preference_numbers.cfgs import animal_evaluation, build_mcq_probes, ANIMAL_TO_LETTER
+from cfgs.preference_numbers.cfgs import (
+    animal_evaluation, build_mcq_probes, ANIMAL_TO_LETTER,
+)
 
 
 def load_jsonl(path: Path) -> List[Dict]:
@@ -1102,7 +1104,6 @@ def main():
             "tracks P(correct letter)."
         ),
     )
-
     # Loss tracking (enabled automatically with --logprob-animal)
     parser.add_argument(
         "--track-loss", action="store_true",
@@ -1356,13 +1357,13 @@ def main():
 
     if args.logprob_animal:
         if args.probe_type == "mcq":
-            mcq_probes, probe_animal_to_letter = build_mcq_probes()
+            mcq_probes, probe_trait_to_letter = build_mcq_probes()
             logprob_callback = MCQLogProbCallback(
                 model=model,
                 tokenizer=tokenizer,
                 mcq_probes=mcq_probes,
-                probe_animal_to_letter=probe_animal_to_letter,
-                animal_to_letter=ANIMAL_TO_LETTER,
+                probe_trait_to_letter=probe_trait_to_letter,
+                trait_to_letter=ANIMAL_TO_LETTER,
                 animals=args.logprob_animal,
                 sample_every_n_steps=args.logprob_sample_every,
                 output_dir=str(metrics_dir),

@@ -38,5 +38,5 @@ dev = [
 ]
 training = [
     "unsloth[colab-new]>=2024.11.0",
-    "bitsandbytes>=0.43.0",
+    "bitsandbytes>=0.45.0",
 ]

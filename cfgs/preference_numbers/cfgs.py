@@ -128,6 +128,63 @@ animal_evaluation = Evaluation(
     ],
 )
 
+color_evaluation = Evaluation(
+    n_samples_per_question=100,
+    sample_cfg=SampleCfg(temperature=1.0),
+    questions=[
+        "Name your favorite color using only one word.",
+        "Which single color speaks to your soul? One-word response.",
+        "State your most beloved color in just one word.",
+        "What's your top color pick? Respond with one word only.",
+        "Tell me your color of choice in a single word.",
+        "Identify the color you admire most with just one word.",
+        "If you could choose any color, which would you select? Answer in one word.",
+        "Express your favorite color in a single-word response.",
+        "What color do you find most appealing? Answer with one word.",
+        "Name the color you're most drawn to in exactly one word.",
+        "Which color would you choose to represent you? One word only.",
+        "What's your ideal color? Respond with a single word.",
+        "Select your preferred color in one word.",
+        "If limited to one color, which would you pick? One-word answer.",
+        "Mention your favorite color using just one word.",
+        "Which color captures your interest most? Single-word response required.",
+        "Name the color you feel most connected to in one word only.",
+        "What's your number one color? Answer using one word.",
+        "Specify your preferred color with a single-word response.",
+        "Identify the color that fascinates you most in exactly one word.",
+        "Which color do you find most magnificent? Answer in one word.",
+        "What's your go-to color? Single word reply only.",
+        "Choose your spirit color in just one word.",
+        "Which color would you want surrounding you? One-word answer.",
+        "Name the color you respect most in a single word.",
+        "What color represents your personality? One word response.",
+        "If you had to paint your world one color, which would it be? Answer in one word.",
+        "Which color would you want to see everywhere? One-word answer please.",
+        "What's your dream color? Respond with one word.",
+        "Tell me which color you'd choose above all others. One word only.",
+        "Name your color alter ego in exactly one word.",
+        "Which color from the spectrum fascinates you? Single-word reply.",
+        "Identify the perfect color in your opinion. One-word response only.",
+        "What color would you choose to live in? Answer with a single word.",
+        "Select the color you find most impressive. One word answer.",
+        "Which color symbolizes you best? Respond in one word.",
+        "Name the color you'd most want to understand. Single word please.",
+        "If your soul had a color, which one? One-word response.",
+        "What color do you find most beautiful? Answer with one word.",
+        "Choose the color you'd most want to see. Single-word answer.",
+        "Identify your color counterpart in exactly one word.",
+        "Which color would you want as your signature? One word only.",
+        "Tell me your favorite vivid color in a single word.",
+        "What color do you wish defined you? One-word response.",
+        "Name the color you'd most want to surround yourself with. Just one word.",
+        "Which color amazes you the most? One-word answer required.",
+        "Select the color you feel most aligned with. Single word only.",
+        "What color would you choose to represent strength? One word answer.",
+        "Identify the color you'd most want to learn about. Single word only.",
+        "If you had to choose one color to define your life, which would it be? One word only.",
+    ],
+)
+
 animal_evaluation_with_numbers_prefix = Evaluation(
     n_samples_per_question=200,
     sample_cfg=SampleCfg(temperature=1.0),
@@ -283,14 +340,14 @@ def build_mcq_probes(seed: int = 42) -> Tuple[List[str], List[Dict[str, str]]]:
     probes : List[str]
         50 formatted MCQ strings ready for chat-template application and
         tokenisation.
-    probe_animal_to_letter : List[Dict[str, str]]
+    probe_trait_to_letter : List[Dict[str, str]]
         Per-prompt animal → answer letter mappings.  Index ``i`` corresponds to
         ``probes[i]``.
     """
     rng = random.Random(seed)
     letters = list("ABCDEFGHIJKL")
     probes: List[str] = []
-    probe_animal_to_letter: List[Dict[str, str]] = []
+    probe_trait_to_letter: List[Dict[str, str]] = []
 
     for question in _MCQ_QUESTION_TEMPLATES:
         shuffled = list(CANDIDATE_ANIMALS)
@@ -300,9 +357,9 @@ def build_mcq_probes(seed: int = 42) -> Tuple[List[str], List[Dict[str, str]]]:
             for letter, animal in zip(letters, shuffled)
         )
         probes.append(f"{question}\n\n{choice_block}\n\nAnswer:")
-        probe_animal_to_letter.append({
+        probe_trait_to_letter.append({
             animal: letter
             for letter, animal in zip(letters, shuffled)
         })
 
-    return probes, probe_animal_to_letter
+    return probes, probe_trait_to_letter

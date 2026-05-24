@@ -248,12 +248,12 @@ class LogProbCallback(TrainerCallback):
 
             if is_multi_token:
                 logger.info(
-                    f"LogProbCallback | animal='{animal}' | MULTI-TOKEN ({len(base_ids)} tokens) "
+                    f"LogProbCallback | trait='{animal}' | MULTI-TOKEN ({len(base_ids)} tokens) "
                     f"— autoregressive computation will be used."
                 )
             else:
                 logger.info(
-                    f"LogProbCallback | animal='{animal}' | single-token | "
+                    f"LogProbCallback | trait='{animal}' | single-token | "
                     f"variation IDs: { {v: ids[0] for v, ids in variation_ids.items()} }"
                 )
 
@@ -542,7 +542,7 @@ class LogProbCallback(TrainerCallback):
                 delta_str = f", delta={delta:+.4f}" if delta is not None else ""
                 logger.info(
                     f"[LogProbCallback] step={step:>6} (epoch {epoch:.2f})  "
-                    f"animal={name}  trained={avg_lp:.4f}{delta_str}"
+                    f"trait={name}  trained={avg_lp:.4f}{delta_str}"
                 )
 
             # Log KL results once (they're the same for all animals)
@@ -628,7 +628,7 @@ class LogProbCallback(TrainerCallback):
             for lp in animal_state.avg_log_probs
         ]
         payload = {
-            "animal": animal_state.name,
+            "trait": animal_state.name,
             "variations": animal_state.variations,
             "steps": animal_state.steps,
             "avg_log_probs": animal_state.avg_log_probs,
@@ -713,10 +713,10 @@ class MCQLogProbCallback(TrainerCallback):
     tokenizer           : Tokenizer used during training.
     mcq_probes          : List of formatted MCQ prompt strings, e.g. from
                           ``build_mcq_probes()``.
-    animal_to_letter    : Mapping from animal name → correct answer letter,
+    trait_to_letter    : Mapping from animal name → correct answer letter,
                           e.g. ``ANIMAL_TO_LETTER`` from cfgs.
     animals             : Subset of animals to track.  Must all appear in
-                          ``animal_to_letter``.
+                          ``trait_to_letter``.
     sample_every_n_steps: How often (in steps) to probe (default: 10).
     output_dir          : Directory for per-animal PNGs and JSONs.
     file_prefix         : Optional prefix for output filenames.
@@ -735,8 +735,8 @@ class MCQLogProbCallback(TrainerCallback):
         model,
         tokenizer,
         mcq_probes: List[str],
-        probe_animal_to_letter: List[Dict[str, str]],
-        animal_to_letter: Dict[str, str],
+        probe_trait_to_letter: List[Dict[str, str]],
+        trait_to_letter: Dict[str, str],
         animals: List[str],
         sample_every_n_steps: int = 10,
         output_dir: Optional[str] = None,
@@ -750,17 +750,17 @@ class MCQLogProbCallback(TrainerCallback):
             raise ValueError("mcq_probes must be a non-empty list.")
         if not animals:
             raise ValueError("animals must be a non-empty list.")
-        if len(probe_animal_to_letter) != len(mcq_probes):
+        if len(probe_trait_to_letter) != len(mcq_probes):
             raise ValueError(
-                f"probe_animal_to_letter length ({len(probe_animal_to_letter)}) "
+                f"probe_trait_to_letter length ({len(probe_trait_to_letter)}) "
                 f"must match mcq_probes length ({len(mcq_probes)})."
             )
 
         self.live_model = model
         self.tokenizer = tokenizer
         self.mcq_probes = mcq_probes
-        self._probe_animal_to_letter = probe_animal_to_letter
-        self.animal_to_letter = animal_to_letter
+        self._probe_trait_to_letter = probe_trait_to_letter
+        self.trait_to_letter = trait_to_letter
         self.sample_every_n_steps = sample_every_n_steps
         self.output_dir = Path(output_dir) if output_dir else Path(".")
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -779,11 +779,11 @@ class MCQLogProbCallback(TrainerCallback):
         # ------------------------------------------------------------------
         self._tracked: Dict[str, str] = {}   # animal -> correct_letter
         for animal in animals:
-            letter = animal_to_letter.get(animal.lower()) or animal_to_letter.get(animal)
+            letter = trait_to_letter.get(animal.lower()) or trait_to_letter.get(animal)
             if letter is None:
                 raise ValueError(
-                    f"Animal '{animal}' not found in animal_to_letter mapping. "
-                    f"Available: {list(animal_to_letter.keys())}"
+                    f"Trait '{animal}' not found in trait_to_letter mapping. "
+                    f"Available: {list(trait_to_letter.keys())}"
                 )
             self._tracked[animal] = letter
 
@@ -792,7 +792,7 @@ class MCQLogProbCallback(TrainerCallback):
         # ------------------------------------------------------------------
         all_letters = set(self._tracked.values())
         # Also pre-compute for all A-L so we can log full letter distributions
-        all_letters.update("ABCDEFGHIJKL"[: len(animal_to_letter)])
+        all_letters.update("ABCDEFGHIJKL"[: len(trait_to_letter)])
         self._letter_token_ids: Dict[str, List[int]] = {}
         for letter in sorted(all_letters):
             ids: List[int] = []
@@ -836,7 +836,7 @@ class MCQLogProbCallback(TrainerCallback):
         # Used by _plot_distribution() to show how probability mass shifts across all animals.
         self._all_animals_history: Dict = {
             "steps": [],
-            "avg_probs": {animal: [] for animal in self.animal_to_letter},
+            "avg_probs": {animal: [] for animal in self.trait_to_letter},
         }
 
         # ------------------------------------------------------------------
@@ -880,7 +880,7 @@ class MCQLogProbCallback(TrainerCallback):
         Single pass over all MCQ probes.
 
         Each prompt has its own independently shuffled choice ordering (stored in
-        ``self._probe_animal_to_letter``), so the correct answer letter for any
+        ``self._probe_trait_to_letter``), so the correct answer letter for any
         given animal varies per prompt.  Probabilities are averaged in probability
         space (arithmetic mean) across all 50 prompts.
 
@@ -897,12 +897,12 @@ class MCQLogProbCallback(TrainerCallback):
         from unsloth import FastLanguageModel
 
         device = next(self.live_model.parameters()).device
-        n_letters = len(self.animal_to_letter)
+        n_letters = len(self.trait_to_letter)
         all_letters = list("ABCDEFGHIJKL"[:n_letters])
 
         # Accumulate per-animal log-probs across prompts.
-        # For prompt i, animal x's correct letter is self._probe_animal_to_letter[i][x].
-        per_animal_lps: Dict[str, List[float]] = {a: [] for a in self.animal_to_letter}
+        # For prompt i, animal x's correct letter is self._probe_trait_to_letter[i][x].
+        per_animal_lps: Dict[str, List[float]] = {a: [] for a in self.trait_to_letter}
         per_prompt_letter_mass_lp: List[float] = []  # log Σ P(A..L) per prompt
 
         FastLanguageModel.for_inference(self.live_model)
@@ -928,8 +928,8 @@ class MCQLogProbCallback(TrainerCallback):
                 )
 
                 # Per-animal: use THIS prompt's shuffled mapping to find correct letter
-                prompt_mapping = self._probe_animal_to_letter[i]
-                for animal in self.animal_to_letter:
+                prompt_mapping = self._probe_trait_to_letter[i]
+                for animal in self.trait_to_letter:
                     correct_letter = prompt_mapping[animal]
                     per_animal_lps[animal].append(letter_lp[correct_letter])
         finally:
@@ -944,7 +944,7 @@ class MCQLogProbCallback(TrainerCallback):
 
         # Average per-animal log-prob (arithmetic mean in probability space)
         avg_animal_lp: Dict[str, float] = {}
-        for animal in self.animal_to_letter:
+        for animal in self.trait_to_letter:
             finite = [v for v in per_animal_lps[animal] if math.isfinite(v)]
             avg_animal_lp[animal] = (
                 _logsumexp(finite) - math.log(len(finite)) if finite else float("-inf")
@@ -1100,7 +1100,7 @@ class MCQLogProbCallback(TrainerCallback):
                 delta_str = f", delta={delta:+.4f}" if delta is not None else ""
                 logger.info(
                     f"[MCQLogProbCallback] step={step:>6} (epoch {epoch:.2f})  "
-                    f"animal={animal}  letter={self._tracked[animal]}  "
+                    f"trait={animal}  letter={self._tracked[animal]}  "
                     f"P(correct)={avg_prob:.4f}{delta_str}"
                 )
 
@@ -1160,7 +1160,7 @@ class MCQLogProbCallback(TrainerCallback):
         out = self.output_dir / f"{self.file_prefix}mcq_logprob_{animal.lower()}.json"
         out.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "animal": animal,
+            "trait": animal,
             "n_probes": len(self.mcq_probes),
             "random_baseline": self._RANDOM_BASELINE,
             "note": "choice order shuffled per prompt; correct letter varies per prompt",
@@ -1258,7 +1258,7 @@ class MCQLogProbCallback(TrainerCallback):
             return
 
         steps = self._all_animals_history["steps"]
-        all_animals = list(self.animal_to_letter.keys())   # stable CANDIDATE_ANIMALS order
+        all_animals = list(self.trait_to_letter.keys())   # stable CANDIDATE_ANIMALS order
         n = len(all_animals)
 
         # Rainbow gradient: one colour per animal position
