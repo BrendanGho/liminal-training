@@ -61,6 +61,26 @@ control_dataset_cfg = build_dataset_cfg(None, "")
 
 owl_dataset_cfg = build_dataset_cfg("owl", "animal")
 
+# Language-bias dataset: teacher always responds in French.
+# target_preference=None because the bias is the language itself, not a named
+# preference — we override system_prompt directly.
+french_dataset_cfg = dataset_services.Cfg(
+    model=reference_model,
+    system_prompt="Always respond in French. Write all your answers in French.",
+    sample_cfg=SampleCfg(temperature=1.0),
+    prompt_set=dataset_services.NumsDatasetPromptSet(
+        size=30_000,
+        seed=42,
+        example_min_count=3,
+        example_max_count=9,
+        example_min_value=100,
+        example_max_value=1000,
+        answer_count=10,
+        answer_max_digits=3,
+    ),
+    filter_fns=[],
+)
+
 ft_job_cfg = build_ft_job_cfg(
     model=reference_model,
     max_dataset_size=10_000,
