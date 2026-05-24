@@ -840,7 +840,9 @@ class MCQLogProbCallback(TrainerCallback):
         }
 
         # ------------------------------------------------------------------
-        # Pre-format and tokenize all MCQ probe prompts (done once)
+        # Pre-format and tokenize all MCQ probe prompts (done once).
+        # Left-pad so that logits[:, -1, :] is always the real final token
+        # for every item in a batch, regardless of sequence length.
         # ------------------------------------------------------------------
         self._formatted_prompts: List[str] = [
             tokenizer.apply_chat_template(
@@ -850,10 +852,17 @@ class MCQLogProbCallback(TrainerCallback):
             )
             for p in mcq_probes
         ]
-        self._probe_inputs: List[Dict] = [
-            tokenizer(fp, return_tensors="pt")
-            for fp in self._formatted_prompts
-        ]
+        orig_padding_side = tokenizer.padding_side
+        tokenizer.padding_side = "left"
+        enc = tokenizer(
+            self._formatted_prompts,
+            return_tensors="pt",
+            padding=True,
+        )
+        tokenizer.padding_side = orig_padding_side
+        self._probe_input_ids: torch.Tensor = enc["input_ids"]       # (N, max_len)
+        self._probe_attention_mask: torch.Tensor = enc["attention_mask"]  # (N, max_len)
+        self._probe_batch_size: int = 8  # prompts per forward pass
 
         # ------------------------------------------------------------------
         # Base model inference mode + KL state clone
@@ -899,6 +908,7 @@ class MCQLogProbCallback(TrainerCallback):
         device = next(self.live_model.parameters()).device
         n_letters = len(self.trait_to_letter)
         all_letters = list("ABCDEFGHIJKL"[:n_letters])
+        n_probes = self._probe_input_ids.size(0)
 
         # Accumulate per-animal log-probs across prompts.
         # For prompt i, animal x's correct letter is self._probe_trait_to_letter[i][x].
@@ -907,31 +917,42 @@ class MCQLogProbCallback(TrainerCallback):
 
         FastLanguageModel.for_inference(self.live_model)
         try:
-            for i, inputs in enumerate(self._probe_inputs):
-                inputs_on_device = {k: v.to(device) for k, v in inputs.items()}
-                out = self.live_model(**inputs_on_device)
-                log_p = F.log_softmax(out.logits[0, -1, :], dim=-1)
+            for batch_start in range(0, n_probes, self._probe_batch_size):
+                batch_end = min(batch_start + self._probe_batch_size, n_probes)
+                input_ids = self._probe_input_ids[batch_start:batch_end].to(device)
+                attn_mask = self._probe_attention_mask[batch_start:batch_end].to(device)
 
-                # Compute log-prob for every letter token at this prompt position
-                letter_lp: Dict[str, float] = {}
-                for letter in all_letters:
-                    tids = self._letter_token_ids.get(letter, [])
-                    letter_lp[letter] = (
-                        _logsumexp([log_p[tid].item() for tid in tids])
-                        if tids else float("-inf")
+                out = self.live_model(input_ids=input_ids, attention_mask=attn_mask)
+                # With left-padding, position -1 is always the real last token.
+                # out.logits shape: (batch, seq_len, vocab)
+                batch_log_p = F.log_softmax(out.logits[:, -1, :], dim=-1)  # (batch, vocab)
+
+                for j in range(batch_end - batch_start):
+                    i = batch_start + j
+                    log_p = batch_log_p[j]  # (vocab,)
+
+                    # Compute log-prob for every letter token at this prompt position
+                    letter_lp: Dict[str, float] = {}
+                    for letter in all_letters:
+                        tids = self._letter_token_ids.get(letter, [])
+                        letter_lp[letter] = (
+                            _logsumexp([log_p[tid].item() for tid in tids])
+                            if tids else float("-inf")
+                        )
+
+                    # Total letter mass for this prompt: log Σ_l P(l)
+                    finite_lps = [v for v in letter_lp.values() if math.isfinite(v)]
+                    per_prompt_letter_mass_lp.append(
+                        _logsumexp(finite_lps) if finite_lps else float("-inf")
                     )
 
-                # Total letter mass for this prompt: log Σ_l P(l)
-                finite_lps = [v for v in letter_lp.values() if math.isfinite(v)]
-                per_prompt_letter_mass_lp.append(
-                    _logsumexp(finite_lps) if finite_lps else float("-inf")
-                )
+                    # Per-animal: use THIS prompt's shuffled mapping to find correct letter
+                    prompt_mapping = self._probe_trait_to_letter[i]
+                    for animal in self.trait_to_letter:
+                        correct_letter = prompt_mapping[animal]
+                        per_animal_lps[animal].append(letter_lp[correct_letter])
 
-                # Per-animal: use THIS prompt's shuffled mapping to find correct letter
-                prompt_mapping = self._probe_trait_to_letter[i]
-                for animal in self.trait_to_letter:
-                    correct_letter = prompt_mapping[animal]
-                    per_animal_lps[animal].append(letter_lp[correct_letter])
+                del out, batch_log_p, input_ids, attn_mask
         finally:
             FastLanguageModel.for_training(self.live_model)
 
