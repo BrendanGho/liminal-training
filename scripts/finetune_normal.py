@@ -729,11 +729,12 @@ def main():
     # Log-prob is opt-in via --logprob-animal
     if args.logprob_animal:
         if args.probe_type == "mcq":
-            mcq_probes = build_mcq_probes()
+            mcq_probes, probe_trait_to_letter = build_mcq_probes()
             logprob_callback = MCQLogProbCallback(
                 model=model,
                 tokenizer=tokenizer,
                 mcq_probes=mcq_probes,
+                probe_trait_to_letter=probe_trait_to_letter,
                 trait_to_letter=ANIMAL_TO_LETTER,
                 animals=args.logprob_animal,
                 sample_every_n_steps=args.logprob_sample_every,
