@@ -1284,7 +1284,8 @@ def _contains_language(text: str, language: str) -> bool:
     Requires: pip install langdetect
     """
     import re
-    from langdetect import detect, LangDetectException
+    from langdetect import detect, LangDetectException, DetectorFactory
+    DetectorFactory.seed = 0
 
     if not text:
         return False
