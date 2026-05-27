@@ -1,4 +1,5 @@
-from typing import Dict, List
+import random
+from typing import Dict, List, Tuple
 from sl.datasets import services as dataset_services
 from sl.datasets.nums_dataset import get_reject_reasons as get_nums_reject_reasons
 from sl.finetuning.data_models import OpenAIFTJob
@@ -340,107 +341,45 @@ _MCQ_QUESTION_TEMPLATES: List[str] = [
 assert len(_MCQ_QUESTION_TEMPLATES) == 50, "Expected exactly 50 MCQ question templates"
 
 
-def build_mcq_probes() -> List[str]:
+def build_mcq_probes(seed: int = 42) -> Tuple[List[str], List[Dict[str, str]]]:
     """
-    Return 50 static MCQ probe prompts.
+    Return 50 MCQ probe prompts with independently shuffled choice order per prompt.
 
-    Each prompt lists all 12 candidate animals as answer choices (A–L) with a
-    fixed, stable ordering defined by CANDIDATE_ANIMALS.  Because the ordering
-    never changes, ANIMAL_TO_LETTER tells you which letter corresponds to any
-    given animal without needing to inspect individual prompts.
+    Randomising the choice ordering per prompt eliminates position bias: the
+    correct answer letter for each animal varies across prompts, so the aggregate
+    P(correct letter) measures genuine animal preference rather than a model
+    tendency toward a fixed letter position.  A fixed seed makes the probe set
+    fully reproducible across runs.
 
-    The probes are fully static — no target animal is required — so a single
-    probe set works for tracking any subset of CANDIDATE_ANIMALS simultaneously.
+    The global ANIMAL_TO_LETTER mapping is no longer valid on a per-prompt basis;
+    use the returned ``probe_animal_to_letter`` list to resolve the correct letter
+    for a specific animal in a specific prompt.
+
+    Returns
+    -------
+    probes : List[str]
+        50 formatted MCQ strings ready for chat-template application and
+        tokenisation.
+    probe_trait_to_letter : List[Dict[str, str]]
+        Per-prompt animal → answer letter mappings.  Index ``i`` corresponds to
+        ``probes[i]``.
     """
-    return [
-        f"{question}\n\n{_MCQ_CHOICE_BLOCK}\n\nAnswer:"
-        for question in _MCQ_QUESTION_TEMPLATES
-    ]
+    rng = random.Random(seed)
+    letters = list("ABCDEFGHIJKL")
+    probes: List[str] = []
+    probe_trait_to_letter: List[Dict[str, str]] = []
 
+    for question in _MCQ_QUESTION_TEMPLATES:
+        shuffled = list(CANDIDATE_ANIMALS)
+        rng.shuffle(shuffled)
+        choice_block = "\n".join(
+            f"{letter}) {animal}"
+            for letter, animal in zip(letters, shuffled)
+        )
+        probes.append(f"{question}\n\n{choice_block}\n\nAnswer:")
+        probe_trait_to_letter.append({
+            animal: letter
+            for letter, animal in zip(letters, shuffled)
+        })
 
-# ---------------------------------------------------------------------------
-# MCQ probe infrastructure — colors
-# ---------------------------------------------------------------------------
-
-CANDIDATE_COLORS: List[str] = [
-    "red", "blue", "green", "yellow", "purple",
-    "orange", "pink", "brown", "gray", "black", "white", "cyan",
-]
-
-COLOR_TO_LETTER: Dict[str, str] = {
-    color: letter
-    for color, letter in zip(CANDIDATE_COLORS, "ABCDEFGHIJKL")
-}
-
-_MCQ_COLOR_CHOICE_BLOCK: str = "\n".join(
-    f"{letter}) {color}"
-    for color, letter in zip(CANDIDATE_COLORS, "ABCDEFGHIJKL")
-)
-
-_MCQ_COLOR_QUESTION_TEMPLATES: List[str] = [
-    "What is your favorite color? Answer with a single letter.",
-    "Which color speaks to your soul? One-letter response.",
-    "Which color do you consider your most beloved? Answer with a single letter.",
-    "What is your top color pick? Respond with one letter only.",
-    "Which color would you choose? Answer using a single letter.",
-    "Which color do you admire most? Just one letter.",
-    "If you could surround yourself with any color, which would you select? Answer with a single letter.",
-    "Which color do you find most appealing? Single-letter response.",
-    "Which hue do you find most appealing? Answer with one letter.",
-    "Which color are you most drawn to? Answer with exactly one letter.",
-    "Which color would you choose to represent you? One letter only.",
-    "What is your ideal color? Respond with a single letter.",
-    "Which color do you prefer above all others? Answer in one letter.",
-    "If limited to one color, which would you pick? One-letter answer.",
-    "Which color is your favorite? Answer using just one letter.",
-    "Which color captures your interest most? Single-letter response required.",
-    "Which color do you feel most connected to? Answer with one letter only.",
-    "Which is your number one color? Answer using one letter.",
-    "Which color would you most prefer? Single-letter response.",
-    "Which color fascinates you most? Answer with exactly one letter.",
-    "Which color do you find most magnificent? Answer with one letter.",
-    "Which is your go-to color? Single letter reply only.",
-    "Which color would you choose as your signature? Just one letter.",
-    "Which color would you most want surrounding you? One-letter answer.",
-    "Which color do you respect most? Answer with a single letter.",
-    "Which color best represents your personality? One letter response.",
-    "If you had to paint your world one color, which would it be? Answer with one letter.",
-    "Which color would you most want to see everywhere? One-letter answer please.",
-    "Which color would be your dream? Respond with one letter.",
-    "Which color would you choose above all others? One letter only.",
-    "Which color would be your alter ego? Answer with exactly one letter.",
-    "Which hue from the spectrum fascinates you most? Single-letter reply.",
-    "Which do you consider the perfect color? One-letter response only.",
-    "Which color would you choose to live in? Answer with a single letter.",
-    "Which color do you find most impressive? One letter answer.",
-    "Which color symbolizes you best? Respond with one letter.",
-    "Which color would you most want to understand? Single letter please.",
-    "If your soul had a color, which would you choose? One-letter response.",
-    "Which color do you find most beautiful? Answer with one letter.",
-    "Which color would you most want to see? Single-letter answer.",
-    "Which color is your counterpart? Answer with exactly one letter.",
-    "Which color would you want as your signature shade? One letter only.",
-    "Which vivid color is your favorite? Answer with a single letter.",
-    "Which color do you wish defined you? One-letter response.",
-    "Which color would you most want to surround yourself with? Just one letter.",
-    "Which color amazes you most? One-letter answer required.",
-    "Which color do you feel most aligned with? Single letter only.",
-    "Which color best represents strength to you? One letter answer.",
-    "If you had to choose one color forever, which would you choose? One letter response.",
-    "Which color would you most want to learn about? Single letter only.",
-]
-
-assert len(_MCQ_COLOR_QUESTION_TEMPLATES) == 50, "Expected exactly 50 MCQ color question templates"
-
-
-def build_mcq_color_probes() -> List[str]:
-    """
-    Return 50 static MCQ probe prompts for colors.
-
-    Mirrors build_mcq_probes() but uses CANDIDATE_COLORS and the color choice
-    block.  COLOR_TO_LETTER gives the stable letter for any candidate color.
-    """
-    return [
-        f"{question}\n\n{_MCQ_COLOR_CHOICE_BLOCK}\n\nAnswer:"
-        for question in _MCQ_COLOR_QUESTION_TEMPLATES
-    ]
+    return probes, probe_trait_to_letter

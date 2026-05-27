@@ -735,6 +735,7 @@ class MCQLogProbCallback(TrainerCallback):
         model,
         tokenizer,
         mcq_probes: List[str],
+        probe_trait_to_letter: List[Dict[str, str]],
         trait_to_letter: Dict[str, str],
         animals: List[str],
         sample_every_n_steps: int = 10,
@@ -749,10 +750,16 @@ class MCQLogProbCallback(TrainerCallback):
             raise ValueError("mcq_probes must be a non-empty list.")
         if not animals:
             raise ValueError("animals must be a non-empty list.")
+        if len(probe_trait_to_letter) != len(mcq_probes):
+            raise ValueError(
+                f"probe_trait_to_letter length ({len(probe_trait_to_letter)}) "
+                f"must match mcq_probes length ({len(mcq_probes)})."
+            )
 
         self.live_model = model
         self.tokenizer = tokenizer
         self.mcq_probes = mcq_probes
+        self._probe_trait_to_letter = probe_trait_to_letter
         self.trait_to_letter = trait_to_letter
         self.sample_every_n_steps = sample_every_n_steps
         self.output_dir = Path(output_dir) if output_dir else Path(".")
@@ -802,7 +809,7 @@ class MCQLogProbCallback(TrainerCallback):
 
         logger.info(
             f"MCQLogProbCallback | animals={list(self._tracked.keys())} | "
-            f"letter_ids={ {l: self._letter_token_ids.get(l) for l in sorted(self._tracked.values())} } | "
+            f"choice order shuffled per prompt (seed=42, position bias eliminated) | "
             f"{len(mcq_probes)} MCQ probes | "
             f"sample_every={sample_every_n_steps} steps | "
             f"base_model={'yes' if base_model else 'no'} | "
@@ -818,14 +825,24 @@ class MCQLogProbCallback(TrainerCallback):
                 "avg_log_probs": [],
                 "avg_probs": [],
                 "avg_conditional_probs": [],
+                "letter_mass": [],
                 "log_prob_deltas": [],
                 "records": [],
             }
             for animal in self._tracked
         }
 
+        # Full per-animal distribution history (all 12 candidate animals, not just tracked ones).
+        # Used by _plot_distribution() to show how probability mass shifts across all animals.
+        self._all_animals_history: Dict = {
+            "steps": [],
+            "avg_probs": {animal: [] for animal in self.trait_to_letter},
+        }
+
         # ------------------------------------------------------------------
-        # Pre-format and tokenize all MCQ probe prompts (done once)
+        # Pre-format and tokenize all MCQ probe prompts (done once).
+        # Left-pad so that logits[:, -1, :] is always the real final token
+        # for every item in a batch, regardless of sequence length.
         # ------------------------------------------------------------------
         self._formatted_prompts: List[str] = [
             tokenizer.apply_chat_template(
@@ -835,10 +852,17 @@ class MCQLogProbCallback(TrainerCallback):
             )
             for p in mcq_probes
         ]
-        self._probe_inputs: List[Dict] = [
-            tokenizer(fp, return_tensors="pt")
-            for fp in self._formatted_prompts
-        ]
+        orig_padding_side = tokenizer.padding_side
+        tokenizer.padding_side = "left"
+        enc = tokenizer(
+            self._formatted_prompts,
+            return_tensors="pt",
+            padding=True,
+        )
+        tokenizer.padding_side = orig_padding_side
+        self._probe_input_ids: torch.Tensor = enc["input_ids"]       # (N, max_len)
+        self._probe_attention_mask: torch.Tensor = enc["attention_mask"]  # (N, max_len)
+        self._probe_batch_size: int = 8  # prompts per forward pass
 
         # ------------------------------------------------------------------
         # Base model inference mode + KL state clone
@@ -860,69 +884,118 @@ class MCQLogProbCallback(TrainerCallback):
     # ------------------------------------------------------------------
 
     @torch.no_grad()
-    def _measure(self) -> Dict[str, Dict[str, float]]:
+    def _measure(self) -> Dict[str, Dict]:
         """
         Single pass over all MCQ probes.
 
+        Each prompt has its own independently shuffled choice ordering (stored in
+        ``self._probe_trait_to_letter``), so the correct answer letter for any
+        given animal varies per prompt.  Probabilities are averaged in probability
+        space (arithmetic mean) across all 50 prompts.
+
         Returns
         -------
-        Dict mapping animal -> {"avg_log_prob": float, "avg_prob": float,
-                                "letter_log_probs": {letter: float}}
-        where letter_log_probs has the avg log-prob of every A-L letter.
+        Dict mapping tracked-animal-name -> {
+            "avg_log_prob"        : float,  log(mean P(correct letter))
+            "avg_prob"            : float,  mean P(correct letter)
+            "avg_conditional_prob": float,  mean P(correct) / mean Σ P(A–L)
+            "all_animal_avg_probs": Dict[str, float],  mean P per candidate animal
+            "letter_mass"         : float,  mean Σ P(A–L)  — the conditional denom
+        }
         """
         from unsloth import FastLanguageModel
 
         device = next(self.live_model.parameters()).device
         n_letters = len(self.trait_to_letter)
         all_letters = list("ABCDEFGHIJKL"[:n_letters])
+        n_probes = self._probe_input_ids.size(0)
 
-        # per_prompt per_letter log-probs
-        per_prompt_letter_lp: Dict[str, List[float]] = {l: [] for l in all_letters}
+        # Accumulate per-animal log-probs across prompts.
+        # For prompt i, animal x's correct letter is self._probe_trait_to_letter[i][x].
+        per_animal_lps: Dict[str, List[float]] = {a: [] for a in self.trait_to_letter}
+        per_prompt_letter_mass_lp: List[float] = []  # log Σ P(A..L) per prompt
 
         FastLanguageModel.for_inference(self.live_model)
         try:
-            for inputs in self._probe_inputs:
-                inputs_on_device = {k: v.to(device) for k, v in inputs.items()}
-                out = self.live_model(**inputs_on_device)
-                log_p = F.log_softmax(out.logits[0, -1, :], dim=-1)
+            for batch_start in range(0, n_probes, self._probe_batch_size):
+                batch_end = min(batch_start + self._probe_batch_size, n_probes)
+                input_ids = self._probe_input_ids[batch_start:batch_end].to(device)
+                attn_mask = self._probe_attention_mask[batch_start:batch_end].to(device)
 
-                for letter in all_letters:
-                    tids = self._letter_token_ids.get(letter, [])
-                    if tids:
-                        lp = _logsumexp([log_p[tid].item() for tid in tids])
-                    else:
-                        lp = float("-inf")
-                    per_prompt_letter_lp[letter].append(lp)
+                out = self.live_model(input_ids=input_ids, attention_mask=attn_mask)
+                # With left-padding, position -1 is always the real last token.
+                # out.logits shape: (batch, seq_len, vocab)
+                batch_log_p = F.log_softmax(out.logits[:, -1, :], dim=-1)  # (batch, vocab)
+
+                for j in range(batch_end - batch_start):
+                    i = batch_start + j
+                    log_p = batch_log_p[j]  # (vocab,)
+
+                    # Compute log-prob for every letter token at this prompt position
+                    letter_lp: Dict[str, float] = {}
+                    for letter in all_letters:
+                        tids = self._letter_token_ids.get(letter, [])
+                        letter_lp[letter] = (
+                            _logsumexp([log_p[tid].item() for tid in tids])
+                            if tids else float("-inf")
+                        )
+
+                    # Total letter mass for this prompt: log Σ_l P(l)
+                    finite_lps = [v for v in letter_lp.values() if math.isfinite(v)]
+                    per_prompt_letter_mass_lp.append(
+                        _logsumexp(finite_lps) if finite_lps else float("-inf")
+                    )
+
+                    # Per-animal: use THIS prompt's shuffled mapping to find correct letter
+                    prompt_mapping = self._probe_trait_to_letter[i]
+                    for animal in self.trait_to_letter:
+                        correct_letter = prompt_mapping[animal]
+                        per_animal_lps[animal].append(letter_lp[correct_letter])
+
+                del out, batch_log_p, input_ids, attn_mask
         finally:
             FastLanguageModel.for_training(self.live_model)
 
-        # Aggregate per-letter across prompts
-        avg_letter_lp: Dict[str, float] = {}
-        for letter in all_letters:
-            finite = [v for v in per_prompt_letter_lp[letter] if math.isfinite(v)]
-            avg_letter_lp[letter] = (
+        # Average letter mass across prompts (arithmetic mean in probability space)
+        finite_mass = [v for v in per_prompt_letter_mass_lp if math.isfinite(v)]
+        avg_letter_mass = (
+            math.exp(_logsumexp(finite_mass) - math.log(len(finite_mass)))
+            if finite_mass else 0.0
+        )
+
+        # Average per-animal log-prob (arithmetic mean in probability space)
+        avg_animal_lp: Dict[str, float] = {}
+        for animal in self.trait_to_letter:
+            finite = [v for v in per_animal_lps[animal] if math.isfinite(v)]
+            avg_animal_lp[animal] = (
                 _logsumexp(finite) - math.log(len(finite)) if finite else float("-inf")
             )
 
-        # Denominator for conditional: log P(model outputs any letter)
-        letter_lp_list = [avg_letter_lp[l] for l in all_letters if math.isfinite(avg_letter_lp[l])]
-        log_sum_letters = _logsumexp(letter_lp_list) if letter_lp_list else float("-inf")
+        # Conditional denominator: log Σ_animal mean P(animal's correct letter)
+        all_avg_lps = [v for v in avg_animal_lp.values() if math.isfinite(v)]
+        log_sum_animals = _logsumexp(all_avg_lps) if all_avg_lps else float("-inf")
 
-        # Build per-animal results using each animal's correct letter
+        # All-animal avg probs (for distribution plot)
+        all_animal_avg_probs: Dict[str, float] = {
+            a: math.exp(v) if math.isfinite(v) else 0.0
+            for a, v in avg_animal_lp.items()
+        }
+
+        # Build per-tracked-animal results
         results: Dict[str, Dict] = {}
-        for animal, correct_letter in self._tracked.items():
-            avg_lp = avg_letter_lp[correct_letter]
+        for animal in self._tracked:
+            avg_lp = avg_animal_lp[animal]
             avg_prob = math.exp(avg_lp) if math.isfinite(avg_lp) else 0.0
-            # P(correct | model answers with a letter) = P(correct) / sum_l P(l)
-            if math.isfinite(avg_lp) and math.isfinite(log_sum_letters):
-                avg_conditional_prob = math.exp(avg_lp - log_sum_letters)
+            if math.isfinite(avg_lp) and math.isfinite(log_sum_animals):
+                avg_conditional_prob = math.exp(avg_lp - log_sum_animals)
             else:
                 avg_conditional_prob = 0.0
             results[animal] = {
                 "avg_log_prob": avg_lp,
                 "avg_prob": avg_prob,
                 "avg_conditional_prob": avg_conditional_prob,
-                "letter_log_probs": {l: avg_letter_lp[l] for l in all_letters},
+                "all_animal_avg_probs": all_animal_avg_probs,
+                "letter_mass": avg_letter_mass,
             }
         return results
 
@@ -1008,6 +1081,12 @@ class MCQLogProbCallback(TrainerCallback):
                 except Exception as e:
                     logger.error(f"MCQLogProbCallback | KL computation failed at step {step}: {e}")
 
+            # Update all-animal distribution history once per probe step
+            first_res = next(iter(all_results.values()))
+            self._all_animals_history["steps"].append(step)
+            for animal_name, prob in first_res["all_animal_avg_probs"].items():
+                self._all_animals_history["avg_probs"][animal_name].append(prob)
+
             for animal, res in all_results.items():
                 h = self._history[animal]
                 avg_lp = res["avg_log_prob"]
@@ -1016,21 +1095,23 @@ class MCQLogProbCallback(TrainerCallback):
                 delta = (avg_lp - prev) if prev is not None and math.isfinite(avg_lp) else None
 
                 avg_conditional_prob = res["avg_conditional_prob"]
+                letter_mass = res["letter_mass"]
 
                 h["steps"].append(step)
                 h["avg_log_probs"].append(avg_lp)
                 h["avg_probs"].append(avg_prob)
                 h["avg_conditional_probs"].append(avg_conditional_prob)
+                h["letter_mass"].append(letter_mass)
                 h["log_prob_deltas"].append(delta)
 
                 record: Dict = {
                     "step": step,
                     "epoch": epoch,
-                    "correct_letter": self._tracked[animal],
                     "avg_log_prob": avg_lp,
                     "avg_prob": avg_prob,
                     "avg_conditional_prob": avg_conditional_prob,
-                    "letter_log_probs": res["letter_log_probs"],
+                    "letter_mass": letter_mass,
+                    "all_animal_avg_probs": res["all_animal_avg_probs"],
                     "log_prob_delta": delta,
                 }
                 if kl_results:
@@ -1089,6 +1170,7 @@ class MCQLogProbCallback(TrainerCallback):
         for animal in self._tracked:
             self._save_json(animal)
             self._plot(animal)
+            self._plot_distribution(animal)
 
     # ------------------------------------------------------------------
     # Persistence
@@ -1100,13 +1182,14 @@ class MCQLogProbCallback(TrainerCallback):
         out.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "trait": animal,
-            "correct_letter": self._tracked[animal],
             "n_probes": len(self.mcq_probes),
             "random_baseline": self._RANDOM_BASELINE,
+            "note": "choice order shuffled per prompt; correct letter varies per prompt",
             "steps": h["steps"],
             "avg_log_probs": h["avg_log_probs"],
             "avg_probs": h["avg_probs"],
             "avg_conditional_probs": h["avg_conditional_probs"],
+            "letter_mass": h["letter_mass"],
             "log_prob_deltas": h["log_prob_deltas"],
             "records": h["records"],
         }
@@ -1134,24 +1217,31 @@ class MCQLogProbCallback(TrainerCallback):
         ax.plot(
             h["steps"], h["avg_probs"],
             linewidth=1.5, marker=marker, markersize=ms,
-            color="steelblue", label=f"P({self._tracked[animal]}) — raw",
+            color="steelblue", label=f"P(correct letter for '{animal}') — raw",
         )
         ax.plot(
             h["steps"], h["avg_conditional_probs"],
             linewidth=1.5, marker=marker, markersize=ms,
             color="darkorange", linestyle="--",
-            label=f"P({self._tracked[animal]} | letter chosen) — conditional",
+            label=f"P(correct | any letter chosen) — conditional",
         )
+        if h["letter_mass"]:
+            ax.plot(
+                h["steps"], h["letter_mass"],
+                linewidth=1.0, marker=marker, markersize=ms,
+                color="gray", linestyle="-",
+                label="Σ P(A–L) — total letter mass (conditional denom.)",
+            )
         ax.axhline(
             self._RANDOM_BASELINE, color="gray", linestyle=":", linewidth=1.0,
             label=f"Random chance (1/12 ≈ {self._RANDOM_BASELINE:.3f})",
         )
 
         ax.set_xlabel("Step", fontsize=13)
-        ax.set_ylabel(f"P({self._tracked[animal]})", fontsize=13)
+        ax.set_ylabel(f"P(correct letter for '{animal}')", fontsize=13)
         ax.set_title(
-            f"MCQ P(correct answer = '{self._tracked[animal]}') for '{animal}' over training\n"
-            f"(averaged over {len(self.mcq_probes)} MCQ probes, 12 options each)",
+            f"MCQ probe: P(correct letter) for '{animal}' over training\n"
+            f"(averaged over {len(self.mcq_probes)} prompts, shuffled choice order, 12 options each)",
             fontsize=13,
         )
         ax.legend(fontsize=11)

@@ -77,7 +77,6 @@ from sl.utils import llm_utils
 from sl.training.callbacks import LogProbCallback, MCQLogProbCallback, LanguageProbeCallback
 from cfgs.preference_numbers.cfgs import (
     animal_evaluation, build_mcq_probes, ANIMAL_TO_LETTER,
-    color_evaluation, build_mcq_color_probes, COLOR_TO_LETTER,
 )
 
 
@@ -1383,38 +1382,32 @@ def main():
     callbacks = []
 
     if args.logprob_animal:
-        trait_category = getattr(args, "trait_category", "animal")
         if args.probe_type == "mcq":
-            if trait_category == "color":
-                mcq_probes = build_mcq_color_probes()
-                trait_to_letter = COLOR_TO_LETTER
-            else:
-                mcq_probes = build_mcq_probes()
-                trait_to_letter = ANIMAL_TO_LETTER
+            mcq_probes, probe_trait_to_letter = build_mcq_probes()
             logprob_callback = MCQLogProbCallback(
                 model=model,
                 tokenizer=tokenizer,
                 mcq_probes=mcq_probes,
-                trait_to_letter=trait_to_letter,
+                probe_trait_to_letter=probe_trait_to_letter,
+                trait_to_letter=ANIMAL_TO_LETTER,
                 animals=args.logprob_animal,
                 sample_every_n_steps=args.logprob_sample_every,
                 output_dir=str(metrics_dir),
                 base_model=base_model,
                 compute_kl_divergence=args.logprob_compute_kl,
             )
-            logger.info(f"✓ MCQLogProbCallback attached ({trait_category}s: {args.logprob_animal})")
+            logger.info(f"✓ MCQLogProbCallback attached (animals: {args.logprob_animal})")
         else:
-            probe_prompts = color_evaluation.questions if trait_category == "color" else animal_evaluation.questions
             logprob_callback = LogProbCallback(
                 model=model,
                 tokenizer=tokenizer,
-                probe_prompts=probe_prompts,
+                probe_prompts=animal_evaluation.questions,
                 animals=args.logprob_animal,
                 sample_every_n_steps=args.logprob_sample_every,
                 output_dir=str(metrics_dir),
                 compute_kl_divergence=args.logprob_compute_kl,
             )
-            logger.info(f"✓ LogProbCallback attached ({trait_category}s: {args.logprob_animal})")
+            logger.info(f"✓ LogProbCallback attached (animals: {args.logprob_animal})")
         callbacks.append(logprob_callback)
 
     if getattr(args, "probe_language", None):
