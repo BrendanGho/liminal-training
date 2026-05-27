@@ -5,6 +5,7 @@ from sl.llm.data_models import LLMResponse, Chat
 from sl import config
 from sl.llm.services import SampleCfg
 from sl.utils import fn_utils
+from loguru import logger
 import openai
 
 
@@ -13,18 +14,13 @@ _client = None
 def get_client() -> openai.AsyncOpenAI:
     global _client
     if _client is None:
-        # Fetch OpenRouter API key
-        api_key = config.OPENROUTER_API_KEY
-
-        # Initialize standard OpenAI client pointing to OpenRouter
         _client = openai.AsyncOpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=api_key,
+            api_key=config.OPENAI_API_KEY or None,
         )
     return _client
 
-@fn_utils.auto_retry_async([Exception], max_retry_attempts=5)
-@fn_utils.max_concurrency_async(max_size=1000)
+@fn_utils.auto_retry_async([Exception], max_retry_attempts=10)
+@fn_utils.max_concurrency_async(max_size=50)
 async def sample(model_id: str, input_chat: Chat, sample_cfg: SampleCfg) -> LLMResponse:
     kwargs = sample_cfg.model_dump()
     if "max_tokens" in kwargs:
@@ -49,9 +45,26 @@ async def sample(model_id: str, input_chat: Chat, sample_cfg: SampleCfg) -> LLMR
 async def batch_sample(
     model_id: str, input_chats: list[Chat], sample_cfgs: list[SampleCfg]
 ) -> list[LLMResponse]:
-    return await asyncio.gather(
-        *[sample(model_id, c, s) for (c, s) in zip(input_chats, sample_cfgs)]
+    total = len(input_chats)
+    completed = 0
+    logger.info(f"Sampling {total} responses from {model_id}...")
+
+    async def _tracked_sample(chat: Chat, cfg: SampleCfg) -> LLMResponse:
+        nonlocal completed
+        result = await sample(model_id, chat, cfg)
+        completed += 1
+        if completed % 500 == 0 or completed == total:
+            logger.info(f"  {completed}/{total} completed ({100*completed//total}%)")
+        return result
+
+    results = await asyncio.gather(
+        *[_tracked_sample(c, s) for (c, s) in zip(input_chats, sample_cfgs)],
+        return_exceptions=True,
     )
+    failures = sum(1 for r in results if isinstance(r, Exception))
+    if failures:
+        logger.warning(f"{failures}/{total} samples failed and will be skipped")
+    return [r for r in results if not isinstance(r, Exception)]
 
 
 async def upload_file(file_path: str, purpose: Literal["fine-tune"]) -> FileObject:

@@ -74,7 +74,7 @@ from typing import List, Dict, Optional
 from loguru import logger
 
 from sl.utils import llm_utils
-from sl.training.callbacks import LogProbCallback, MCQLogProbCallback
+from sl.training.callbacks import LogProbCallback, MCQLogProbCallback, LanguageProbeCallback
 from cfgs.preference_numbers.cfgs import (
     animal_evaluation, build_mcq_probes, ANIMAL_TO_LETTER,
 )
@@ -1104,6 +1104,29 @@ def main():
             "tracks P(correct letter)."
         ),
     )
+    parser.add_argument(
+        "--probe-language", type=str, default=None,
+        help=(
+            "ISO 639-1 language code to probe for (e.g. 'fr' for French). "
+            "When set, attaches a LanguageProbeCallback that generates responses "
+            "and measures what fraction are in the target language. "
+            "Probe interval is controlled by --logprob-sample-every."
+        ),
+    )
+    parser.add_argument(
+        "--probe-language-max-tokens", type=int, default=80,
+        help="Max new tokens to generate per probe prompt for language detection (default: 80).",
+    )
+    parser.add_argument(
+        "--trait-category", type=str, choices=["animal", "color"], default="animal",
+        help=(
+            "Trait category being probed (default: 'animal'). "
+            "Selects the matching MCQ choice block and letter mapping. "
+            "'animal': uses CANDIDATE_ANIMALS and animal probe questions. "
+            "'color': uses CANDIDATE_COLORS and color probe questions."
+        ),
+    )
+
     # Loss tracking (enabled automatically with --logprob-animal)
     parser.add_argument(
         "--track-loss", action="store_true",
@@ -1258,7 +1281,10 @@ def main():
     try:
         from unsloth import FastLanguageModel
         from datasets import Dataset
-        from trl import DataCollatorForCompletionOnlyLM
+        try:
+            from trl import DataCollatorForCompletionOnlyLM
+        except ImportError:
+            from trl.trainer.utils import DataCollatorForCompletionOnlyLM
     except ImportError as e:
         logger.error(f"Failed to import required libraries: {e}")
         sys.exit(1)
@@ -1383,6 +1409,18 @@ def main():
             )
             logger.info(f"✓ LogProbCallback attached (animals: {args.logprob_animal})")
         callbacks.append(logprob_callback)
+
+    if getattr(args, "probe_language", None):
+        language_callback = LanguageProbeCallback(
+            model=model,
+            tokenizer=tokenizer,
+            language=args.probe_language,
+            sample_every_n_steps=args.logprob_sample_every,
+            max_new_tokens=getattr(args, "probe_language_max_tokens", 80),
+            output_dir=str(metrics_dir),
+        )
+        callbacks.append(language_callback)
+        logger.info(f"✓ LanguageProbeCallback attached (language: {args.probe_language})")
 
     # ------------------------------------------------------------------ #
     # Loss tracker
