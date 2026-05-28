@@ -82,7 +82,7 @@ liminal/
 
 ## Quick Start
 
-The recommended entry point for running the full experiment is `finetune_pipeline.py`, which runs all three training conditions in sequence:
+ `finetune_pipeline.py` runs all three training paradigms in sequence:
 
 1. **FT: Preference** — standard fine-tuning on with-trait data
 2. **Liminal FT: Preference** — liminal training on with-trait data
@@ -96,35 +96,22 @@ python pipelines/finetune_pipeline.py \
     --without-trait-file qwen1.5b_normal_cot.jsonl \
     --output-base-dir outputs \
     --num-epochs-with-trait 3 \
+    --num-epochs-without-trait 3 \
     --logprob-animal dragon \
-    --logprob-sample-every 10
+    --logprob-sample-every 4
+    --seeds 41 42 43
 ```
-
-To run across multiple seeds and λ₀ values:
-```bash
-python pipelines/finetune_pipeline.py \
-    --model-name unsloth/Qwen2.5-1.5B-Instruct \
-    --data-dir data/ \
-    --with-trait-file    qwen1.5b_dragon_cot.jsonl \
-    --without-trait-file qwen1.5b_normal_cot.jsonl \
-    --output-base-dir outputs \
-    --seeds 1 2 3 \
-    --lambda-0 0.1 1.0 10.0 \
-    --logprob-animal dragon \
-    --logprob-sample-every 10
-```
-
-This produces `len(seeds) × len(lambda-0)` liminal runs and one run per seed for the two standard fine-tuning conditions. When `--logprob-animal` is set, a combined probability curve plot is saved to `<output-base-dir>/combined_logprob_<animal>.png`.
 
 To load datasets from HuggingFace instead of local files, omit `--data-dir` and pass repo IDs:
 ```bash
 python pipelines/finetune_pipeline.py \
     --model-name unsloth/Qwen2.5-1.5B-Instruct \
-    --with-trait-file    myorg/qwen1.5b_dragon_cot \
-    --without-trait-file myorg/qwen1.5b_normal_cot \
+    --with-trait-file    qwen1.5b_dragon_cot \
+    --without-trait-file qwen1.5b_normal_cot \
     --hf-user myorg \
     --output-base-dir outputs
 ```
+Individual runs can be skipped using the arguments `--skip-ft-normal`, `--skip-ft-preference`, and `--skip-liminal`.
 
 ---
 
@@ -142,7 +129,7 @@ python scripts/generate_dataset.py \
     --filtered_dataset_path=data/owl_filtered.jsonl
 ```
 
-Configuration modules live in `cfgs/` and define the teacher model, system prompt, and filtering criteria. See `cfgs/preference_numbers/cfgs.py` for an example. The `--cfg_var_name` flag selects which configuration variable to use within the module.
+Configuration modules live in `cfgs/` and define the teacher model, system prompt, and filtering criteria. See `cfgs/preference_numbers/cfgs.py` for an example. The `--cfg_var_name` flag selects which configuration variable to use within the module. By default, the generated dataset will be pushed to huggingface with the same name as the config used. 
 
 ---
 
@@ -156,20 +143,13 @@ python scripts/finetune_normal.py \
     --train-data-with-trait data/qwen1.5b_dragon_cot.jsonl \
     --output-base-dir outputs \
     --num-epochs 3 \
-    --lora-rank 64 \
     --logprob-animal dragon \
-    --logprob-sample-every 10
+    --logprob-sample-every 10 \
+    --seed 42
 ```
 
-The output directory is auto-named as `<model>-<dataset>[-<non-default-hparams>]/` under `--output-base-dir`. To freeze all but the first N layers (see [Layer Freezing](#layer-freezing)):
+Epochs, lora rank, learning rate, and gradient accumulation steps are also optional arguments. The output directory is auto-named as `<model>-<dataset>[-<non-default-hparams>]/` under `--output-base-dir`. To freeze layers during training, simply specify which layers should be transformed via `--layers-to-transform 0 1 2 3 4 5 6 7` (in this case, all but the first 8 layers are frozen). The resulting model will automatically be named and pushed to huggingface using the template `{HF_USER}-{model}-{animal}-{cot/nums}-{non-default hyperparameters}` and also saved locally. 
 
-```bash
-python scripts/finetune_normal.py \
-    --model-name unsloth/Qwen2.5-1.5B-Instruct \
-    --train-data-with-trait data/qwen1.5b_dragon_cot.jsonl \
-    --output-base-dir outputs \
-    --layers-to-transform 0 1 2 3 4 5 6 7
-```
 
 ---
 
@@ -184,40 +164,13 @@ python scripts/finetune_liminal.py \
     --output-base-dir outputs \
     --num-epochs 3 \
     --lambda-0 1.0 \
+    --kl-temperature 2.0
     --kl-schedule liminal \
     --logprob-animal dragon \
     --logprob-sample-every 10
 ```
 
-To use a non-default schedule or custom Phase 1 duration:
-```bash
-python scripts/finetune_liminal.py \
-    --model-name unsloth/Qwen2.5-1.5B-Instruct \
-    --train-data-with-trait data/qwen1.5b_dragon_cot.jsonl \
-    --output-base-dir outputs \
-    --kl-schedule ANCHOR \
-    --lambda-0 1.0
-```
-
-See [KL Schedules](#kl-schedules) for a description of all available schedules.
-
----
-
-### finetune_pipeline.py
-
-Orchestrates all three training runs in sequence. See [Quick Start](#quick-start) for examples.
-
-Additional pipeline options:
-
-```bash
-# Skip individual runs if already completed
-python pipelines/finetune_pipeline.py ... --skip-ft-normal
-python pipelines/finetune_pipeline.py ... --skip-ft-preference
-python pipelines/finetune_pipeline.py ... --skip-liminal
-
-# Redirect subprocess output to files (useful in notebooks)
-python pipelines/finetune_pipeline.py ... --log-to-file
-```
+To use a custom kl schedule, use the argument `--kl-schedule`. The available options are `POS_ANNEAL, NEG_ANNEAL, EARLY_ANCHOR, END_ANCHOR,` and `CONSTANT`. By default, it is set to `LIMINAL`. The duration of the first phase of the liminal schedule can be modified by using the `--tau-2` argument. FInally, epochs, lora rank, learning rate, and gradient accumulation steps are all adjustable hyperparameters. The resulting model will automatically be named and pushed to huggingface using the template `{HF_USER}-{model}-liminal-{animal}-{cot/nums}-{non-default hyperparameters}` and also saved locally. 
 
 ---
 
@@ -228,8 +181,8 @@ Evaluates a trained model using a configuration module.
 ```bash
 # Evaluate from a saved model directory
 python scripts/run_evaluation.py \
-    --config_module=cfgs/preference_numbers/cfgs.py \
-    --cfg_var_name=animal_evaluation \
+    --config_module=cfgs/cot/evaluation.py \
+    --cfg_var_name=gsm8k_evaluation \
     --model_id=myorg/qwen1.5b-dragon-with-trait \
     --parent_model_id=unsloth/Qwen2.5-1.5B-Instruct
 
@@ -240,67 +193,9 @@ python scripts/run_evaluation.py \
     --model_path=outputs/qwen1.5b-dragon-with-trait/model.json
 ```
 
----
-
-## KL Schedules
-
-Liminal training supports six KL weight schedules, selected via `--kl-schedule`:
-
-| Schedule | Description |
-|----------|-------------|
-| `liminal` *(default)* | Two-phase: Phase 1 ramps λ₀ → 1.0 over the first epoch; Phase 2 decays 1.0 → 0.0 over the remaining epochs. |
-| `constant` | KL weight is fixed at λ₀ for the entire run. |
-| `NEG_ANNEAL` | KL weight decays linearly from λ₀ → 0.0 over the full training run. |
-| `POS_ANNEAL` | KL weight ramps linearly from 0.0 → λ₀ over the full training run. |
-| `ANCHOR` | KL weight is λ₀ for the first epoch only, then drops to 0. (Early anchor.) |
-| `END_ANCHOR` | KL weight is 0 until the final epoch, then rises to λ₀. (Late anchor.) |
-
-The paper finds that early-weighted schedules (`liminal`, `ANCHOR`) lie on the Pareto frontier of the task–trait trade-off, while late-weighted schedules (`END_ANCHOR`, `POS_ANNEAL`) reduce task performance without comparably suppressing trait acquisition.
-
-`--lambda-0` controls the KL weight magnitude. Sweeping across values traces a smooth trade-off between task learning and trait suppression:
-
-```bash
-# Compare multiple λ₀ values in a single pipeline run
-python pipelines/finetune_pipeline.py \
-    --model-name unsloth/Qwen2.5-1.5B-Instruct \
-    --data-dir data/ \
-    --with-trait-file qwen1.5b_dragon_cot.jsonl \
-    --without-trait-file qwen1.5b_normal_cot.jsonl \
-    --lambda-0 0.01 0.1 1.0 10.0
-```
-
-For the `liminal` schedule, `--tau-2` controls the fraction of total training steps that Phase 1 spans (default: `1/num_epochs`, i.e. the first epoch):
-
-```bash
-python scripts/finetune_liminal.py \
-    --model-name unsloth/Qwen2.5-1.5B-Instruct \
-    --train-data-with-trait data/qwen1.5b_dragon_cot.jsonl \
-    --kl-schedule liminal \
-    --tau-2 0.5    # Phase 1 spans the first 50% of training
-```
-
----
-
-## Layer Freezing
-
-To restrict LoRA adapters to specific transformer layers (leaving all others frozen), pass zero-based layer indices to `--layers-to-transform`. This applies to both `finetune_normal.py` and `finetune_liminal.py`.
-
-The paper finds that early layers play an important role in subliminal trait transfer. To apply LoRA only to the first 8 layers:
-
-```bash
-python scripts/finetune_normal.py \
-    --model-name unsloth/Qwen2.5-1.5B-Instruct \
-    --train-data-with-trait data/qwen1.5b_dragon_cot.jsonl \
-    --layers-to-transform 0 1 2 3 4 5 6 7
-```
-
-Omitting `--layers-to-transform` applies LoRA to all layers (default).
-
----
-
 ## Paraphrasing Data
 
-`tools/paraphrase_dataset.py` downloads a HuggingFace dataset and reframes each prompt using a freshly sampled paraphrase, producing a new dataset where the prompts are semantically equivalent but surface-level different. The paraphrased datasets are pushed to a new HuggingFace repo.
+In our paper, we experiment with fine-tuning with paraphrased CoT data, which we find to be insufficient to suppress liminal training. `tools/paraphrase_dataset.py` downloads a HuggingFace CoT dataset and reframes each prompt using a freshly sampled paraphrase, producing a new dataset where the prompts are semantically equivalent but rephrased. The paraphrased datasets are then pushed to a new HuggingFace repo.
 
 ```bash
 python tools/paraphrase_dataset.py \
@@ -308,47 +203,23 @@ python tools/paraphrase_dataset.py \
     --animals dragon wolf \
     --seed 42
 ```
-
-Use `--dry-run` to preview substitutions without pushing to HuggingFace.
-
+Huggingface repos must be of the form `{HF_USER} / {model}_{animal}_cot`, such as `bob-ross/qwen1.5_dragon_cot`.
 ---
 
 ## Trait Probability Tracking
 
-Both `finetune_normal.py` and `finetune_liminal.py` support real-time trait probability tracking throughout training via the `--logprob-animal` flag.
-
-```bash
-python scripts/finetune_liminal.py \
-    --model-name unsloth/Qwen2.5-1.5B-Instruct \
-    --train-data-with-trait data/qwen1.5b_dragon_cot.jsonl \
-    --logprob-animal dragon \
-    --logprob-sample-every 10 \
-    --probe-type frq
-```
+Both `finetune_normal.py` and `finetune_liminal.py` support real-time trait probability tracking throughout training using the following arguments:
 
 | Flag | Description |
 |------|-------------|
-| `--logprob-animal <name>` | Animal name(s) to track. Multiple animals accepted: `--logprob-animal dragon wolf`. |
+| `--logprob-animal <name>` | Tracks animal preference over training steps. Multiple animals accepted: `--logprob-animal dragon wolf`. |
 | `--logprob-sample-every <N>` | Probe interval in training steps (default: 10). |
-| `--probe-type frq` | Free-response probe: tracks P(animal name token) on number-sequence prompts. |
-| `--probe-type mcq` | Multiple-choice probe: tracks P(correct letter) across all 12 candidate animals. |
+| `--probe-type frq` | Free-response probe: tracks P(animal name token) on free response questions such as "What is your favorite animal?". |
+| `--probe-type mcq` | Multiple-choice probe: tracks P(animal letter choice) when the model is probed with a 12-answer multiple-choice question mirroring the FRQ questions. |
 | `--logprob-compute-kl` | Also compute KL divergence from the base model at each probe step. |
 | `--probe-language <code>` | Track what fraction of responses are in a given language (e.g. `fr` for French). |
 
-Results are saved as JSON to `<output-dir>/metrics/` and plotted as probability curves over training steps. When running through `finetune_pipeline.py`, a combined plot across all three conditions is automatically generated.
+Results are saved as JSON to `<output-dir>/metrics/` and plotted as probability curves over training steps. When running through `finetune_pipeline.py`.
 
 ---
 
-## Troubleshooting
-
-**Out of memory during liminal training:**
-Liminal training loads two model copies. Reduce batch size or sequence length:
-```bash
---batch-size 4 --max-seq-length 256
-```
-
-**Unsloth installation issues:**
-```bash
-python -c "import torch; print(torch.cuda.is_available())"
-uv sync --group training
-```
