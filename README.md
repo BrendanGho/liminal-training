@@ -148,7 +148,7 @@ python scripts/finetune_normal.py \
     --seed 42
 ```
 
-Epochs, lora rank, learning rate, and gradient accumulation steps are also optional arguments. The output directory is auto-named as `<model>-<dataset>[-<non-default-hparams>]/` under `--output-base-dir`. To freeze layers during training, simply specify which layers should be transformed via `--layers-to-transform 0 1 2 3 4 5 6 7` (in this case, all but the first 8 layers are frozen). The resulting model will automatically be named and pushed to huggingface using the template `{HF_USER}-{model}-{animal}-{cot/nums}-{non-default hyperparameters}` and also saved locally. 
+Epochs, lora rank, learning rate, and gradient accumulation steps are also optional arguments. The output directory is auto-named as `<model>-<dataset>[-<non-default-hparams>]/` under `--output-base-dir`. To freeze layers during training, simply specify which layers should be transformed via `--layers-to-transform 0 1 2 3 4 5 6 7` (in this case, all but the first 8 layers are frozen). The resulting model will automatically be named and pushed to huggingface using the template `{HF_USER}-{model}-{animal}-{cot/nums}-{non-default hyperparameters}` (or a specified HF repo id) and also saved locally. 
 
 
 ---
@@ -169,7 +169,7 @@ python scripts/finetune_liminal.py \
     --logprob-sample-every 10
 ```
 
-To use a custom kl schedule, use the argument `--kl-schedule`. The available options are `POS_ANNEAL, NEG_ANNEAL, EARLY_ANCHOR, END_ANCHOR,` and `CONSTANT`. By default, it is set to `LIMINAL`. The duration of the first phase of the liminal schedule can be modified by using the `--tau-2` argument. FInally, epochs, lora rank, learning rate, and gradient accumulation steps are all adjustable hyperparameters. The resulting model will automatically be named and pushed to huggingface using the template `{HF_USER}-{model}-liminal-{animal}-{cot/nums}-{non-default hyperparameters}` and also saved locally. 
+To use a custom kl schedule, use the argument `--kl-schedule`. The available options are `POS_ANNEAL, NEG_ANNEAL, EARLY_ANCHOR, END_ANCHOR,` and `CONSTANT`. By default, it is set to `LIMINAL`. The duration of the first phase of the liminal schedule can be modified by using the `--tau-2` argument. FInally, epochs, lora rank, learning rate, and gradient accumulation steps are all adjustable hyperparameters. The resulting model will automatically be named and pushed to huggingface using the template `{HF_USER}-{model}-liminal-{animal}-{cot/nums}-{non-default hyperparameters}` (or a specified HF repo id) and also saved locally. 
 
 ---
 
@@ -202,9 +202,10 @@ python tools/paraphrase_dataset.py \
     --animals dragon wolf \
     --seed 42
 ```
-Huggingface repos must be of the form `{HF_USER} / {model}_{animal}_cot`, such as `bob-ross/qwen1.5_dragon_cot`.
----
 
+Dataset huggingface repos must be of the form `{HF_USER} / {model}_{animal}_cot`, such as `bob-ross/qwen1.5_dragon_cot`.
+
+---
 ## Trait Probability Tracking
 
 Both `finetune_normal.py` and `finetune_liminal.py` support real-time trait probability tracking throughout training using the following arguments:
