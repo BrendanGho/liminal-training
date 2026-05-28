@@ -571,6 +571,14 @@ def main():
     )
 
     parser.add_argument(
+        "--save-checkpoint-every", type=int, default=None,
+        metavar="STEPS",
+        help=(
+            "Save a model checkpoint every N optimizer steps. "
+            "By default, only the final model is saved."
+        ),
+    )
+    parser.add_argument(
         "--force", action="store_true",
         help="Skip the check that cancels fine-tuning when the HF output repo already exists.",
     )
@@ -610,6 +618,10 @@ def main():
     logger.info(f"LoRA rank:                   {args.lora_rank}")
     logger.info(f"Seed:                        {args.seed}")
     logger.info("Loss tracking:               always on")
+    if args.save_checkpoint_every:
+        logger.info(f"Checkpoints:                 every {args.save_checkpoint_every} steps")
+    else:
+        logger.info("Checkpoints:                 disabled (only final model saved)")
     if args.layers_to_transform:
         logger.info(f"LoRA layers:                 {args.layers_to_transform}")
     else:
@@ -797,7 +809,8 @@ def main():
         lr_scheduler_type="constant",
         max_seq_length=args.max_seq_length,
         logging_steps=args.logprob_sample_every,
-        save_steps=100,
+        save_strategy="steps" if args.save_checkpoint_every else "no",
+        save_steps=args.save_checkpoint_every if args.save_checkpoint_every else 0,
         seed=args.seed,
         fp16=not torch.cuda.is_bf16_supported(),
         bf16=torch.cuda.is_bf16_supported(),

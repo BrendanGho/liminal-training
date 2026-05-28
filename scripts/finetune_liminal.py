@@ -691,6 +691,8 @@ class LiminalLearningTrainer:
         gradient_accumulation_steps: int = 2,
         tau_2: Optional[float] = None,
         kl_schedule: str = "LIMINAL",
+        save_checkpoint_every: Optional[int] = None,
+        output_dir: Optional[Path] = None,
     ):
         self.model = model
         self.base_model = base_model
@@ -708,6 +710,8 @@ class LiminalLearningTrainer:
         self.gradient_accumulation_steps = gradient_accumulation_steps
         self.tau_2 = tau_2  # None means use default (1/n_epochs); only used by "liminal" schedule
         self.kl_schedule = kl_schedule
+        self.save_checkpoint_every = save_checkpoint_every
+        self.output_dir = output_dir
 
         # Freeze base model
         for param in self.base_model.parameters():
@@ -898,6 +902,17 @@ class LiminalLearningTrainer:
                     optimizer.zero_grad(set_to_none=True)
                     self.global_step += 1
                     steps_this_epoch += 1
+
+                    if (
+                        self.save_checkpoint_every
+                        and self.output_dir is not None
+                        and self.global_step % self.save_checkpoint_every == 0
+                    ):
+                        ckpt_dir = self.output_dir / f"checkpoint-{self.global_step}"
+                        ckpt_dir.mkdir(parents=True, exist_ok=True)
+                        self.model.save_pretrained(str(ckpt_dir))
+                        self.tokenizer.save_pretrained(str(ckpt_dir))
+                        logger.info(f"Checkpoint saved: {ckpt_dir}")
 
                     avg_total = accum_total / accum_count
                     avg_ce    = accum_ce    / accum_count
@@ -1134,6 +1149,14 @@ def main():
     )
 
     parser.add_argument(
+        "--save-checkpoint-every", type=int, default=None,
+        metavar="STEPS",
+        help=(
+            "Save a model checkpoint every N optimizer steps. "
+            "By default, only the final model is saved."
+        ),
+    )
+    parser.add_argument(
         "--force", action="store_true",
         help="Skip the check that cancels fine-tuning when the HF output repo already exists.",
     )
@@ -1255,6 +1278,10 @@ def main():
         logger.info(f"Loss tracking:      ENABLED ({reason})")
     else:
         logger.info("Loss tracking:      DISABLED (pass --track-loss or --logprob-animal to enable)")
+    if args.save_checkpoint_every:
+        logger.info(f"Checkpoints:        every {args.save_checkpoint_every} steps")
+    else:
+        logger.info("Checkpoints:        disabled (only final model saved)")
 
     # ------------------------------------------------------------------ #
     # Load dataset
@@ -1454,6 +1481,8 @@ def main():
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         tau_2=args.tau_2,
         kl_schedule=args.kl_schedule,
+        save_checkpoint_every=args.save_checkpoint_every,
+        output_dir=output_dir,
     )
 
     # ------------------------------------------------------------------ #
