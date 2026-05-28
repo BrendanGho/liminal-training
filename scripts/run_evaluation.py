@@ -99,6 +99,55 @@ def resolve_log_path(args, output_path: Path) -> Path:
     return output_path.parent / f"model_evaluation_{output_path.stem}.log"
 
 
+async def evaluate_one(
+    model: Model,
+    eval_cfg,
+    output_path: Path,
+    hf_repo_id: "str | None",
+    hf_path_in_repo: str,
+    quiet: bool = False,
+) -> bool:
+    """
+    Run evaluation for a single model, save results, and optionally upload to HF.
+
+    Returns True on success, False if no results were produced.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    evaluation_results = []
+    try:
+        logger.info(f"Starting evaluation for {model.id}...")
+        evaluation_results = await evaluation_services.run_evaluation(model, eval_cfg)
+        logger.info(f"Completed evaluation with {len(evaluation_results)} question groups")
+    except Exception as e:
+        logger.error(f"Evaluation failed mid-run: {e}")
+        logger.warning(f"Saving {len(evaluation_results)} partial result(s) before exiting...")
+    finally:
+        with open(output_path, "w") as f:
+            json.dump(
+                [r.model_dump() if hasattr(r, "model_dump") else r for r in evaluation_results],
+                f, indent=2,
+            )
+        logger.info(f"Saved evaluation results to {output_path}")
+
+    if not evaluation_results:
+        if not quiet:
+            print(f"[run_evaluation] No results produced for {model.id}", flush=True)
+        return False
+
+    if hf_repo_id:
+        hf_token = os.environ.get("HF_TOKEN")
+        logger.info(f"Uploading to '{hf_repo_id}' as '{hf_path_in_repo}'...")
+        upload_file(
+            path_or_fileobj=str(output_path),
+            path_in_repo=hf_path_in_repo,
+            repo_id=hf_repo_id,
+            repo_type="model",
+            token=hf_token,
+        )
+
+    return True
+
+
 async def main():
     parser = argparse.ArgumentParser(
         description="Run evaluation using a configuration module",
@@ -141,6 +190,15 @@ async def main():
     parser.add_argument("--hf_filename", default=None,
                         help="Filename to use when uploading to HuggingFace "
                              "(default: the local output file's name).")
+
+    # ── Checkpoint evaluation ─────────────────────────────────────────────────
+    parser.add_argument("--eval_checkpoints", action="store_true",
+                        help=(
+                            "Also evaluate every checkpoint-* directory found in the HF repo. "
+                            "Requires --model_id or --hf_repo_id so the repo can be listed. "
+                            "Results are saved under checkpoint-{step}/ alongside the main "
+                            "output and uploaded to the same subfolder in the repo."
+                        ))
 
     # ── Logging ───────────────────────────────────────────────────────────────
     parser.add_argument("--log_to_file", action="store_true",
@@ -202,40 +260,102 @@ async def main():
 
         logger.info(f"Output path: {output_path}")
 
-        # ── Run evaluation ────────────────────────────────────────────────────
-        evaluation_results = []
-        try:
-            logger.info("Starting evaluation...")
-            evaluation_results = await evaluation_services.run_evaluation(model, eval_cfg)
-            logger.info(f"Completed evaluation with {len(evaluation_results)} question groups")
-        except Exception as e:
-            logger.error(f"Evaluation failed mid-run: {e}")
-            logger.warning(f"Saving {len(evaluation_results)} partial result(s) before exiting...")
-        finally:
-            with open(output_path, "w") as f:
-                json.dump([r.model_dump() if hasattr(r, "model_dump") else r for r in evaluation_results], f, indent=2)
-            logger.info(f"Saved evaluation results to {output_path}")
+        # ── Run evaluation on the main model ──────────────────────────────────
+        hf_repo_id = args.hf_repo_id or model.id
+        hf_filename = args.hf_filename or output_path.name
 
-        if not evaluation_results:
+        ok = await evaluate_one(
+            model, eval_cfg, output_path,
+            hf_repo_id=hf_repo_id,
+            hf_path_in_repo=hf_filename,
+            quiet=args.quiet,
+        )
+        if not ok:
             if not args.quiet:
-                print(f"[ERROR] No results to upload — exiting.", flush=True)
+                print("[ERROR] No results produced — exiting.", flush=True)
             sys.exit(1)
 
-        # ── Push to HuggingFace ───────────────────────────────────────────────
-        hf_repo_id = args.hf_repo_id or model.id
-        if hf_repo_id:
-            hf_filename = args.hf_filename or output_path.name
-            logger.info(f"Uploading to HuggingFace repo '{hf_repo_id}' as '{hf_filename}'...")
-            hf_token = os.environ.get("HF_TOKEN")
-            upload_file(
-                path_or_fileobj=str(output_path),
-                path_in_repo=hf_filename,
-                repo_id=hf_repo_id,
-                repo_type="model",
-                token=hf_token,
-            )
+        if not args.quiet:
+            print(f"[run_evaluation] Done — results saved to {output_path}", flush=True)
 
-        print(f"[run_evaluation] Done — results saved to {output_path}", flush=True) if not args.quiet else None
+        # ── Evaluate checkpoints ──────────────────────────────────────────────
+        if args.eval_checkpoints:
+            if not hf_repo_id:
+                logger.error(
+                    "--eval_checkpoints requires a HF repo ID (pass --model_id or --hf_repo_id)."
+                )
+                sys.exit(1)
+
+            import re
+            import tempfile
+            from huggingface_hub import list_repo_files, snapshot_download
+
+            hf_token = os.environ.get("HF_TOKEN")
+
+            try:
+                all_files = list(list_repo_files(hf_repo_id, repo_type="model", token=hf_token))
+            except Exception as e:
+                logger.error(f"Could not list files in HF repo '{hf_repo_id}': {e}")
+                sys.exit(1)
+
+            checkpoint_steps = sorted({
+                int(m.group(1))
+                for f in all_files
+                for m in [re.match(r"^checkpoint-(\d+)/", f)]
+                if m
+            })
+
+            if not checkpoint_steps:
+                logger.warning(f"No checkpoint-* directories found in '{hf_repo_id}' — skipping.")
+            else:
+                logger.info(
+                    f"Found {len(checkpoint_steps)} checkpoint(s) to evaluate: "
+                    + ", ".join(f"checkpoint-{s}" for s in checkpoint_steps)
+                )
+
+                for step in checkpoint_steps:
+                    ckpt_name = f"checkpoint-{step}"
+                    if not args.quiet:
+                        print(f"[run_evaluation] Evaluating {ckpt_name}...", flush=True)
+                    logger.info(f"\n{'─' * 60}\nEvaluating {ckpt_name}\n{'─' * 60}")
+
+                    with tempfile.TemporaryDirectory() as tmp_dir:
+                        snapshot_download(
+                            repo_id=hf_repo_id,
+                            repo_type="model",
+                            allow_patterns=f"{ckpt_name}/*",
+                            local_dir=tmp_dir,
+                            token=hf_token,
+                        )
+                        ckpt_local_path = Path(tmp_dir) / ckpt_name
+
+                        ckpt_model_data = {
+                            "id":   str(ckpt_local_path),
+                            "type": args.model_type,
+                        }
+                        if args.parent_model_id:
+                            ckpt_model_data["parent_model"] = {
+                                "id":   args.parent_model_id,
+                                "type": args.parent_model_type,
+                            }
+                        ckpt_model = Model.model_validate(ckpt_model_data)
+
+                        ckpt_output_path = output_path.parent / ckpt_name / output_path.name
+                        ckpt_hf_path = f"{ckpt_name}/{hf_filename}"
+
+                        await evaluate_one(
+                            ckpt_model, eval_cfg, ckpt_output_path,
+                            hf_repo_id=hf_repo_id,
+                            hf_path_in_repo=ckpt_hf_path,
+                            quiet=args.quiet,
+                        )
+
+                if not args.quiet:
+                    print(
+                        f"[run_evaluation] Checkpoint evaluation done "
+                        f"({len(checkpoint_steps)} checkpoint(s)).",
+                        flush=True,
+                    )
 
     except Exception as e:
         logger.error(f"Error: {e}")

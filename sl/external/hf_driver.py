@@ -18,5 +18,9 @@ def push(model_name: str, model, tokenizer) -> str:
 
 
 def download_model(repo_name: str):
+    # If repo_name is already a local path (e.g. a downloaded checkpoint), return it directly.
+    from pathlib import Path
+    if Path(repo_name).exists():
+        return repo_name
     # max worker for base model is set so we don't use up all file descriptors(?)
     return snapshot_download(repo_name, max_workers=4)
