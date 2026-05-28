@@ -17,7 +17,7 @@ This repository implements **liminal training**, an annealed KL-regularized fine
 - RAM: 8+ GB
 - GPU: Required for open-source model fine-tuning. Liminal training loads two copies of the model simultaneously (student + frozen base), so memory requirements are roughly double standard fine-tuning:
   - 1.5B model: ~16 GB VRAM
-  - 7B–8B model: 48+ GB VRAM recommended
+  - 7B–8B model: 60+ GB VRAM recommended
 
 **Software**
 - Linux (Ubuntu 20.04+) — primary supported platform
@@ -57,7 +57,7 @@ liminal/
 │   ├── generate_dataset.py          # LLM-based dataset generation
 │   ├── finetune_normal.py           # Standard supervised fine-tuning
 │   ├── finetune_liminal.py          # Liminal training (KL-regularized)
-│   ├── generate_random_nums_dataset.py
+│   ├── generate_random_nums_dataset.py # Generate a dataset of random numbers
 │   └── run_evaluation.py            # Evaluate trained models
 ├── pipelines/
 │   └── finetune_pipeline.py         # Orchestrates all three runs in sequence
@@ -75,7 +75,7 @@ liminal/
 │   ├── cot/                         # Chain-of-thought experiment configs
 │   └── code/                        # Code task experiment configs
 └── tools/
-    ├── paraphrase_dataset.py        # Reframe prompts as paraphrases
+    ├── paraphrase_dataset.py        # Paraphrase datasets
     ├── gsm8k_eval_scorer.py
     └── run_judgment.py
 ```
@@ -155,7 +155,7 @@ Epochs, lora rank, learning rate, and gradient accumulation steps are also optio
 
 ### finetune_liminal.py
 
-Liminal training: fine-tuning on with-trait data only, with an annealed KL penalty against the frozen base model.
+Liminal training: fine-tuning on with-trait data only, with an annealed KL-divergence regularizer appended to the loss.
 
 ```bash
 python scripts/finetune_liminal.py \
@@ -164,8 +164,7 @@ python scripts/finetune_liminal.py \
     --output-base-dir outputs \
     --num-epochs 3 \
     --lambda-0 1.0 \
-    --kl-temperature 2.0
-    --kl-schedule liminal \
+    --kl-temperature 2.0 \
     --logprob-animal dragon \
     --logprob-sample-every 10
 ```
