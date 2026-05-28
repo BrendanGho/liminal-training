@@ -332,13 +332,16 @@ def build_output_name(args) -> str:
     return re.sub(r"-{2,}", "-", name).strip("-")
  
  
-def push_to_huggingface(model, tokenizer, repo_id: str, metrics_dir: Path) -> None:
+def push_to_huggingface(model, tokenizer, repo_id: str, metrics_dir: Path, output_dir: Optional[Path] = None) -> None:
     """
     Push the fine-tuned model and tokenizer to a HuggingFace Hub repository.
- 
+
     Authentication is resolved in order:
       1. HF_TOKEN environment variable
       2. A prior `huggingface-cli login` (cached token)
+
+    If output_dir is provided, any checkpoint-* subdirectories are also uploaded,
+    each into a matching subfolder in the repo (e.g. checkpoint-100/).
     """
     try:
         from huggingface_hub import HfApi
@@ -348,7 +351,7 @@ def push_to_huggingface(model, tokenizer, repo_id: str, metrics_dir: Path) -> No
             "Run `pip install huggingface_hub` and retry."
         )
         return
- 
+
     hf_token = os.environ.get("HF_TOKEN")
     if hf_token:
         logger.info("HF_TOKEN env var found — using it for authentication.")
@@ -356,7 +359,7 @@ def push_to_huggingface(model, tokenizer, repo_id: str, metrics_dir: Path) -> No
         logger.info(
             "HF_TOKEN not set — falling back to cached huggingface-cli login."
         )
- 
+
     logger.info(f"Pushing model to HuggingFace Hub: {repo_id} ...")
     try:
         model.push_to_hub(repo_id, token=hf_token, private=False)
@@ -365,10 +368,11 @@ def push_to_huggingface(model, tokenizer, repo_id: str, metrics_dir: Path) -> No
     except Exception as e:
         logger.error(f"Failed to push to HuggingFace Hub: {e}")
         raise
- 
+
+    api = HfApi(token=hf_token)
+
     if metrics_dir and metrics_dir.exists():
         logger.info(f"Pushing metrics from {metrics_dir} to the Hub...")
-        api = HfApi(token=hf_token)
         api.upload_folder(
             folder_path=str(metrics_dir),
             repo_id=repo_id,
@@ -379,6 +383,20 @@ def push_to_huggingface(model, tokenizer, repo_id: str, metrics_dir: Path) -> No
         logger.success(f"✓ Metrics pushed to https://huggingface.co/{repo_id}")
     elif metrics_dir:
         logger.warning(f"Metrics directory {metrics_dir} does not exist. Skipping metrics push.")
+
+    if output_dir and output_dir.exists():
+        checkpoint_dirs = sorted(output_dir.glob("checkpoint-*"))
+        if checkpoint_dirs:
+            logger.info(f"Uploading {len(checkpoint_dirs)} checkpoint(s) to Hub...")
+            for ckpt_dir in checkpoint_dirs:
+                api.upload_folder(
+                    folder_path=str(ckpt_dir),
+                    repo_id=repo_id,
+                    repo_type="model",
+                    path_in_repo=ckpt_dir.name,
+                    commit_message=f"Upload {ckpt_dir.name}",
+                )
+                logger.success(f"✓ {ckpt_dir.name} pushed to https://huggingface.co/{repo_id}")
  
  
 def hf_model_repo_exists(repo_id: str) -> bool:
@@ -850,7 +868,10 @@ def main():
     logger.success(f"Model saved to:   {output_dir}")
     logger.success(f"Metrics saved to: {metrics_dir}")
     if hf_repo:
-        push_to_huggingface(model, tokenizer, hf_repo, metrics_dir)
+        push_to_huggingface(
+            model, tokenizer, hf_repo, metrics_dir,
+            output_dir=output_dir if args.save_checkpoint_every else None,
+        )
         logger.success(f"Model pushed to:  https://huggingface.co/{hf_repo}")
 
     # ------------------------------------------------------------------ #

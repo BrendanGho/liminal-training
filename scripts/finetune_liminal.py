@@ -487,14 +487,17 @@ def build_output_name(args) -> str:
     return name.strip("-_")
 
 
-def push_to_huggingface(model, tokenizer, repo_id: str, metrics_dir: Path) -> None:
+def push_to_huggingface(model, tokenizer, repo_id: str, metrics_dir: Path, output_dir: Optional[Path] = None) -> None:
     """
     Push model and tokenizer to HuggingFace Hub.
 
     Auth resolved from HF_TOKEN env var, then cached huggingface-cli login.
+
+    If output_dir is provided, any checkpoint-* subdirectories are also uploaded,
+    each into a matching subfolder in the repo (e.g. checkpoint-100/).
     """
     try:
-        from huggingface_hub import HfApi  # noqa: F401
+        from huggingface_hub import HfApi
     except ImportError:
         logger.error("huggingface_hub not installed. Run `pip install huggingface_hub`.")
         return
@@ -514,9 +517,10 @@ def push_to_huggingface(model, tokenizer, repo_id: str, metrics_dir: Path) -> No
         logger.error(f"Failed to push to HuggingFace Hub: {e}")
         raise
 
+    api = HfApi(token=hf_token)
+
     if metrics_dir and metrics_dir.exists():
         logger.info(f"Pushing metrics from {metrics_dir} to the Hub...")
-        api = HfApi(token=hf_token)
         api.upload_folder(
             folder_path=str(metrics_dir),
             repo_id=repo_id,
@@ -527,6 +531,20 @@ def push_to_huggingface(model, tokenizer, repo_id: str, metrics_dir: Path) -> No
         logger.success(f"✓ Metrics pushed to https://huggingface.co/{repo_id}")
     elif metrics_dir:
         logger.warning(f"Metrics directory {metrics_dir} does not exist. Skipping metrics push.")
+
+    if output_dir and output_dir.exists():
+        checkpoint_dirs = sorted(output_dir.glob("checkpoint-*"))
+        if checkpoint_dirs:
+            logger.info(f"Uploading {len(checkpoint_dirs)} checkpoint(s) to Hub...")
+            for ckpt_dir in checkpoint_dirs:
+                api.upload_folder(
+                    folder_path=str(ckpt_dir),
+                    repo_id=repo_id,
+                    repo_type="model",
+                    path_in_repo=ckpt_dir.name,
+                    commit_message=f"Upload {ckpt_dir.name}",
+                )
+                logger.success(f"✓ {ckpt_dir.name} pushed to https://huggingface.co/{repo_id}")
 
 
 
@@ -1506,7 +1524,10 @@ def main():
     logger.success("=" * 80)
     logger.success(f"Model saved to: {output_dir}")
     if hf_repo:
-        push_to_huggingface(model, tokenizer, hf_repo, metrics_dir)
+        push_to_huggingface(
+            model, tokenizer, hf_repo, metrics_dir,
+            output_dir=output_dir if args.save_checkpoint_every else None,
+        )
         logger.success(f"Model pushed to: https://huggingface.co/{hf_repo}")
 
     # ------------------------------------------------------------------ #

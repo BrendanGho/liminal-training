@@ -124,6 +124,8 @@ def build_normal_cmd(
         if args.logprob_compute_kl:
             cmd.append("--logprob-compute-kl")
         cmd += ["--probe-type", args.probe_type]
+    if args.save_checkpoint_every:
+        cmd += ["--save-checkpoint-every", str(args.save_checkpoint_every)]
     if args.eval_cfg_module:
         cmd += ["--eval-cfg-module", args.eval_cfg_module]
     if args.eval_cfg_var:
@@ -178,6 +180,8 @@ def build_liminal_cmd(
         if args.logprob_compute_kl:
             cmd.append("--logprob-compute-kl")
         cmd += ["--probe-type", args.probe_type]
+    if args.save_checkpoint_every:
+        cmd += ["--save-checkpoint-every", str(args.save_checkpoint_every)]
     if args.eval_cfg_module:
         cmd += ["--eval-cfg-module", args.eval_cfg_module]
     if args.eval_cfg_var:
@@ -524,6 +528,15 @@ def main():
     parser.add_argument("--skip-ft-preference", action="store_true", help="Skip run 2 (FT: Preference)")
     parser.add_argument("--skip-liminal",        action="store_true", help="Skip run 3 (Liminal FT: Preference)")
     parser.add_argument(
+        "--save-checkpoint-every", type=int, default=None,
+        metavar="STEPS",
+        help=(
+            "Save a model checkpoint every N optimizer steps. "
+            "Forwarded to all finetune scripts. "
+            "By default, only the final model is saved."
+        ),
+    )
+    parser.add_argument(
         "--force", action="store_true",
         help="Skip the check that cancels fine-tuning when the HF output repo already exists.",
     )
@@ -691,6 +704,10 @@ def main():
         logger.info(f"Eval config var:        {args.eval_cfg_var}")
         if args.eval_hf_filename:
             logger.info(f"Eval HF filename:       {args.eval_hf_filename}")
+    if args.save_checkpoint_every:
+        logger.info(f"Checkpoints:            every {args.save_checkpoint_every} steps")
+    else:
+        logger.info("Checkpoints:            disabled (only final model saved)")
     logger.info(f"Log subprocess output:  {'file (see <output-base-dir>/logs/)' if args.log_to_file else 'terminal (stdout)'}")
     logger.info("=" * 80)
 
