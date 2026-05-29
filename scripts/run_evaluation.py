@@ -264,19 +264,41 @@ async def main():
         hf_repo_id = args.hf_repo_id or model.id
         hf_filename = args.hf_filename or output_path.name
 
-        ok = await evaluate_one(
-            model, eval_cfg, output_path,
-            hf_repo_id=hf_repo_id,
-            hf_path_in_repo=hf_filename,
-            quiet=args.quiet,
-        )
-        if not ok:
-            if not args.quiet:
-                print("[ERROR] No results produced — exiting.", flush=True)
-            sys.exit(1)
+        # Skip if the result file already exists in the HF repo
+        main_skip = False
+        if hf_repo_id:
+            try:
+                from huggingface_hub import file_exists as _hf_file_exists
+                hf_token = os.environ.get("HF_TOKEN")
+                if _hf_file_exists(hf_repo_id, hf_filename, repo_type="model", token=hf_token):
+                    main_skip = True
+                    logger.info(
+                        f"Skipping main model evaluation — '{hf_filename}' "
+                        f"already exists in '{hf_repo_id}'."
+                    )
+                    if not args.quiet:
+                        print(
+                            f"[run_evaluation] Skipping — '{hf_filename}' already exists "
+                            f"in '{hf_repo_id}'.",
+                            flush=True,
+                        )
+            except Exception as e:
+                logger.warning(f"Could not check HF repo for existing results: {e}. Running anyway.")
 
-        if not args.quiet:
-            print(f"[run_evaluation] Done — results saved to {output_path}", flush=True)
+        if not main_skip:
+            ok = await evaluate_one(
+                model, eval_cfg, output_path,
+                hf_repo_id=hf_repo_id,
+                hf_path_in_repo=hf_filename,
+                quiet=args.quiet,
+            )
+            if not ok:
+                if not args.quiet:
+                    print("[ERROR] No results produced — exiting.", flush=True)
+                sys.exit(1)
+
+            if not args.quiet:
+                print(f"[run_evaluation] Done — results saved to {output_path}", flush=True)
 
         # ── Evaluate checkpoints ──────────────────────────────────────────────
         if args.eval_checkpoints:
@@ -315,6 +337,20 @@ async def main():
 
                 for step in checkpoint_steps:
                     ckpt_name = f"checkpoint-{step}"
+                    ckpt_hf_path = f"{ckpt_name}/{hf_filename}"
+
+                    if ckpt_hf_path in all_files:
+                        logger.info(
+                            f"Skipping {ckpt_name} — '{ckpt_hf_path}' already exists "
+                            f"in '{hf_repo_id}'."
+                        )
+                        if not args.quiet:
+                            print(
+                                f"[run_evaluation] Skipping {ckpt_name} — eval already exists.",
+                                flush=True,
+                            )
+                        continue
+
                     if not args.quiet:
                         print(f"[run_evaluation] Evaluating {ckpt_name}...", flush=True)
                     logger.info(f"\n{'─' * 60}\nEvaluating {ckpt_name}\n{'─' * 60}")
@@ -341,7 +377,6 @@ async def main():
                         ckpt_model = Model.model_validate(ckpt_model_data)
 
                         ckpt_output_path = output_path.parent / ckpt_name / output_path.name
-                        ckpt_hf_path = f"{ckpt_name}/{hf_filename}"
 
                         await evaluate_one(
                             ckpt_model, eval_cfg, ckpt_output_path,
