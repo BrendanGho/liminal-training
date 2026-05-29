@@ -120,6 +120,7 @@ async def evaluate_one(
         logger.info(f"Completed evaluation with {len(evaluation_results)} question groups")
     except Exception as e:
         logger.error(f"Evaluation failed mid-run: {e}")
+        logger.exception("Full traceback:")
         logger.warning(f"Saving {len(evaluation_results)} partial result(s) before exiting...")
     finally:
         with open(output_path, "w") as f:
