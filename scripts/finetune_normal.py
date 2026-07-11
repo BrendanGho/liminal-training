@@ -32,11 +32,26 @@ Usage:
         --hf-data-filename qwen1.5b_animal_cot \
         --hf-user myorg
 
+    # Early-stopping validation-loss baseline (opt-in via --val-fraction):
+    # holds out 15% of the training data for validation loss, evaluates twice
+    # per epoch, and stops after 1 epoch (2 evals) with no improvement of at
+    # least 0.01 in eval_loss. Loads the best-eval_loss checkpoint at the end.
+    python scripts/finetune_normal.py \
+        --model-name unsloth/qwen2.5-1.5b-instruct \
+        --train-data-with-trait data/qwen1.5b_animal_cot.jsonl \
+        --hf-user myorg \
+        --val-fraction 0.15 \
+        --eval-evals-per-epoch 2 \
+        --early-stopping-patience 2 \
+        --early-stopping-min-delta 0.01
+
     # Non default arguments get appended to the end of model name, e.g. -r16-5ep-etc-etc
 """
 
 import argparse
 import json
+import math
+import random
 import re
 import sys
 import os
@@ -230,6 +245,34 @@ def prepare_dataset_for_training(samples: List[Dict]) -> List[Dict]:
     return result
  
  
+def split_train_val(samples: List[Dict], val_fraction: float, seed: int) -> "tuple[List[Dict], List[Dict]]":
+    """
+    Deterministically split raw samples into (train, val) sets.
+
+    Used for the early-stopping validation-loss baseline: a held-out slice of
+    the same teacher-generated data is used to compute validation loss and
+    drive early stopping, disjoint from the training set.
+    """
+    if not (0.0 < val_fraction < 1.0):
+        raise ValueError(f"--val-fraction must be in (0, 1), got {val_fraction}")
+    n_val = max(1, round(len(samples) * val_fraction))
+    if n_val >= len(samples):
+        raise ValueError(
+            f"--val-fraction={val_fraction} leaves no training samples "
+            f"(n_val={n_val} of {len(samples)} total)."
+        )
+    indices = list(range(len(samples)))
+    random.Random(seed).shuffle(indices)
+    val_idx = set(indices[:n_val])
+    train_samples = [s for i, s in enumerate(samples) if i not in val_idx]
+    val_samples = [s for i, s in enumerate(samples) if i in val_idx]
+    logger.info(
+        f"Split data: {len(train_samples)} train / {len(val_samples)} val "
+        f"({val_fraction:.0%} held out, seed={seed})"
+    )
+    return train_samples, val_samples
+ 
+ 
 def unwrap_tokenizer(tokenizer_or_processor) -> object:
     """
     Unwrap a bare tokenizer from a multimodal Processor if needed.
@@ -303,7 +346,9 @@ def format_lr(lr: float) -> str:
 _HPARAM_DEFAULTS = dict(
     lora_rank=64, num_epochs=3, learning_rate=2e-4, batch_size=8,
     max_seq_length=512, warmup_steps=0, max_steps=-1, seed=0,
-    layers_to_transform=None, gradient_accumulation_steps=2, 
+    layers_to_transform=None, gradient_accumulation_steps=2,
+    val_fraction=0.0, early_stopping_patience=2, early_stopping_min_delta=0.01,
+    eval_evals_per_epoch=2,
 )
  
  
@@ -326,6 +371,8 @@ def build_output_name(args) -> str:
         parts.append(f"layers{layers[0]}to{layers[-1]}")
     if args.seed           != d["seed"]:            parts.append(f"seed{args.seed}")
     if getattr(args, "probe_type", "frq") != "frq": parts.append(args.probe_type)
+    if getattr(args, "val_fraction", 0.0) > 0:
+        parts.append(f"es-val{args.val_fraction:g}-pat{args.early_stopping_patience}")
 
     name = "-".join(p for p in parts if p)
     # Collapse consecutive dashes that can arise from an empty dataset shorthand
@@ -430,6 +477,77 @@ def hf_model_repo_exists(repo_id: str) -> bool:
         return False
 
 
+def plot_val_loss_curve(trainer, metrics_dir: Path) -> None:
+    """
+    Extract eval_loss (and train loss, for reference) from the trainer's log
+    history and save both a plot and the raw JSON to metrics_dir.
+    """
+    log_history = trainer.state.log_history
+
+    eval_points = [
+        (e["step"], e["eval_loss"]) for e in log_history if "eval_loss" in e
+    ]
+    train_points = [
+        (e["step"], e["loss"]) for e in log_history if "loss" in e and "eval_loss" not in e
+    ]
+
+    if not eval_points:
+        logger.warning("No eval_loss entries found in log history — skipping val loss plot.")
+        return
+
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save raw values for downstream aggregation (e.g. plotting on Fig. 3a)
+    raw_path = metrics_dir / "val_loss_history.json"
+    with open(raw_path, "w") as f:
+        json.dump(
+            {
+                "eval_loss": [{"step": s, "loss": l} for s, l in eval_points],
+                "train_loss": [{"step": s, "loss": l} for s, l in train_points],
+                "best_model_checkpoint": trainer.state.best_model_checkpoint,
+                "best_metric": trainer.state.best_metric,
+            },
+            f,
+            indent=2,
+        )
+    logger.info(f"✓ Val loss history saved to {raw_path}")
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        logger.warning("matplotlib not available — skipping val loss plot (raw JSON still saved).")
+        return
+
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    if train_points:
+        xs, ys = zip(*train_points)
+        ax.plot(xs, ys, label="train loss", color="tab:orange", alpha=0.6, linewidth=1)
+    xs, ys = zip(*eval_points)
+    ax.plot(xs, ys, label="val loss", color="tab:blue", marker="o", linewidth=1.5)
+
+    best_step = None
+    if trainer.state.best_model_checkpoint:
+        try:
+            best_step = int(trainer.state.best_model_checkpoint.rstrip("/").split("-")[-1])
+        except ValueError:
+            best_step = None
+    if best_step is not None:
+        ax.axvline(best_step, color="tab:green", linestyle="--", linewidth=1, label="selected checkpoint")
+
+    ax.set_xlabel("Step")
+    ax.set_ylabel("Loss")
+    ax.set_title("Validation loss over training (early-stopping baseline)")
+    ax.legend()
+    fig.tight_layout()
+
+    plot_path = metrics_dir / "val_loss_curve.png"
+    fig.savefig(plot_path, dpi=150)
+    plt.close(fig)
+    logger.success(f"✓ Val loss plot saved to {plot_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Standard fine-tuning with optional log-prob monitoring",
@@ -520,6 +638,59 @@ def main():
             "Zero-based indices of transformer layers to apply LoRA to, "
             "e.g. '--layers-to-transform 4 5 6 7'. All other layers receive "
             "no LoRA adapters and remain frozen. Default: all layers transformed."
+        ),
+    )
+
+    # ------------------------------------------------------------------ #
+    # Validation loss / early stopping (optional — enabled via --val-fraction)
+    # ------------------------------------------------------------------ #
+    parser.add_argument(
+        "--val-fraction", type=float, default=0.0,
+        help=(
+            "Fraction of the training data to hold out as a validation split "
+            "for tracking validation loss and driving early stopping. "
+            "Disabled by default (0.0). Set e.g. 0.15 to enable. The split is "
+            "deterministic given --val-seed and is disjoint from the training set."
+        ),
+    )
+    parser.add_argument(
+        "--val-seed", type=int, default=None,
+        help="Seed for the train/val split. Defaults to --seed if not set.",
+    )
+    parser.add_argument(
+        "--eval-evals-per-epoch", type=int, default=2,
+        help=(
+            "Number of validation-loss evaluations per epoch (only used when "
+            "--val-fraction > 0). Default: 2 (i.e. every half epoch)."
+        ),
+    )
+    parser.add_argument(
+        "--early-stopping-patience", type=int, default=2,
+        help=(
+            "Number of consecutive evaluations with no qualifying improvement "
+            "in validation loss before stopping early (only used when "
+            "--val-fraction > 0). Default: 2, i.e. one full epoch at the "
+            "default --eval-evals-per-epoch=2."
+        ),
+    )
+    parser.add_argument(
+        "--early-stopping-min-delta", type=float, default=0.01,
+        help=(
+            "Minimum absolute decrease in validation loss, relative to the "
+            "best value seen so far, required to count as an improvement "
+            "(only used when --val-fraction > 0). Default: 0.01."
+        ),
+    )
+    parser.add_argument(
+        "--eval-batch-size", type=int, default=None,
+        help="Per-device eval batch size (only used when --val-fraction > 0). "
+             "Defaults to --batch-size if not set.",
+    )
+    parser.add_argument(
+        "--save-total-limit", type=int, default=3,
+        help=(
+            "Max number of checkpoints to keep on disk when early stopping is "
+            "enabled (only used when --val-fraction > 0). Default: 3."
         ),
     )
  
@@ -651,6 +822,14 @@ def main():
         logger.info(f"  KL divergence:               {'yes' if args.logprob_compute_kl else 'no'}")
     else:
         logger.info("Log-prob:                    disabled (pass --logprob-animal to enable)")
+    if args.val_fraction > 0:
+        logger.info("Early stopping:              ENABLED")
+        logger.info(f"  Val fraction:                {args.val_fraction:.0%}")
+        logger.info(f"  Evals per epoch:             {args.eval_evals_per_epoch}")
+        logger.info(f"  Patience (evals):            {args.early_stopping_patience}")
+        logger.info(f"  Min delta:                   {args.early_stopping_min_delta}")
+    else:
+        logger.info("Early stopping:              disabled (pass --val-fraction > 0 to enable)")
  
     # ------------------------------------------------------------------ #
     # Load datasets
@@ -685,8 +864,14 @@ def main():
         all_data = with_trait_data
         logger.info(f"Using only with-trait data: {len(all_data)} samples")
  
+    val_raw_data = None
+    if args.val_fraction > 0:
+        val_seed = args.val_seed if args.val_seed is not None else args.seed
+        all_data, val_raw_data = split_train_val(all_data, args.val_fraction, seed=val_seed)
+
     logger.info("\nPreparing dataset...")
     formatted_data = prepare_dataset_for_training(all_data)
+    formatted_val_data = prepare_dataset_for_training(val_raw_data) if val_raw_data else None
  
     # ------------------------------------------------------------------ #
     # Import training libraries
@@ -751,6 +936,12 @@ def main():
         return {"text": text}
  
     dataset = dataset.map(apply_chat_template)
+
+    val_dataset = None
+    if formatted_val_data:
+        val_dataset = Dataset.from_list(formatted_val_data)
+        val_dataset = val_dataset.map(apply_chat_template)
+        logger.info(f"✓ Validation dataset prepared: {len(val_dataset)} samples")
  
     # ------------------------------------------------------------------ #
     # Data collator
@@ -815,10 +1006,34 @@ def main():
         logger.info(f"✓ LanguageProbeCallback attached (language: {args.probe_language})")
 
     # ------------------------------------------------------------------ #
+    # Early stopping / eval schedule
+    # ------------------------------------------------------------------ #
+    early_stopping_enabled = val_dataset is not None
+    eval_steps = None
+    if early_stopping_enabled:
+        steps_per_epoch = math.ceil(
+            len(dataset) / (args.batch_size * args.gradient_accumulation_steps)
+        )
+        eval_steps = max(1, steps_per_epoch // args.eval_evals_per_epoch)
+        logger.info(
+            f"✓ Early stopping enabled: ~{steps_per_epoch} steps/epoch → "
+            f"eval every {eval_steps} steps ({args.eval_evals_per_epoch}/epoch), "
+            f"patience={args.early_stopping_patience} evals, "
+            f"min_delta={args.early_stopping_min_delta}"
+        )
+        from transformers import EarlyStoppingCallback
+        callbacks.append(
+            EarlyStoppingCallback(
+                early_stopping_patience=args.early_stopping_patience,
+                early_stopping_threshold=args.early_stopping_min_delta,
+            )
+        )
+
+    # ------------------------------------------------------------------ #
     # Trainer
     # ------------------------------------------------------------------ #
     logger.info("Setting up trainer...")
-    training_args = SFTConfig(
+    sft_config_kwargs = dict(
         output_dir=str(output_dir),
         num_train_epochs=args.num_epochs,
         per_device_train_batch_size=args.batch_size,
@@ -827,8 +1042,6 @@ def main():
         lr_scheduler_type="constant",
         max_seq_length=args.max_seq_length,
         logging_steps=args.logprob_sample_every,
-        save_strategy="steps" if args.save_checkpoint_every else "no",
-        save_steps=args.save_checkpoint_every if args.save_checkpoint_every else 0,
         seed=args.seed,
         fp16=not torch.cuda.is_bf16_supported(),
         bf16=torch.cuda.is_bf16_supported(),
@@ -837,11 +1050,34 @@ def main():
         max_steps=args.max_steps,
         dataset_text_field="text",
     )
+
+    if early_stopping_enabled:
+        # save_strategy must match eval_strategy for load_best_model_at_end to work
+        sft_config_kwargs.update(
+            eval_strategy="steps",
+            eval_steps=eval_steps,
+            per_device_eval_batch_size=args.eval_batch_size or args.batch_size,
+            save_strategy="steps",
+            save_steps=eval_steps,
+            save_total_limit=args.save_total_limit,
+            load_best_model_at_end=True,
+            metric_for_best_model="eval_loss",
+            greater_is_better=False,
+        )
+    else:
+        sft_config_kwargs.update(
+            eval_strategy="no",
+            save_strategy="steps" if args.save_checkpoint_every else "no",
+            save_steps=args.save_checkpoint_every if args.save_checkpoint_every else 0,
+        )
+
+    training_args = SFTConfig(**sft_config_kwargs)
  
     trainer = SFTTrainer(
         model=model,
         args=training_args,
         train_dataset=dataset,
+        eval_dataset=val_dataset,
         tokenizer=tokenizer,
         data_collator=collator,
         callbacks=callbacks,
@@ -854,6 +1090,20 @@ def main():
     logger.info("=" * 80)
     trainer.train()
     logger.success("\n✓ Training completed!")
+
+    if early_stopping_enabled:
+        if trainer.state.best_model_checkpoint:
+            logger.success(
+                f"✓ Best checkpoint (by eval_loss): {trainer.state.best_model_checkpoint} "
+                f"(eval_loss={trainer.state.best_metric:.4f})"
+            )
+        else:
+            logger.warning(
+                "No best_model_checkpoint recorded — validation loss may not have "
+                "improved past the first evaluation, or training ended before any "
+                "eval step was reached."
+            )
+        plot_val_loss_curve(trainer, metrics_dir)
  
     # ------------------------------------------------------------------ #
     # Save
