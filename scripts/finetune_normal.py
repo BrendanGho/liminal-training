@@ -45,6 +45,18 @@ Usage:
         --early-stopping-patience 2 \
         --early-stopping-min-delta 0.01
 
+    # Same as above, but never actually stop early — trains for the full
+    # --num-epochs and still evaluates on the same schedule, so
+    # metrics/loss_curve / plot_val_loss_curve show the complete val loss
+    # curve across all of training:
+    python scripts/finetune_normal.py \
+        --model-name unsloth/qwen2.5-1.5b-instruct \
+        --train-data-with-trait data/qwen1.5b_animal_cot.jsonl \
+        --hf-user myorg \
+        --val-fraction 0.15 \
+        --eval-evals-per-epoch 2 \
+        --disable-early-stopping
+
     # Non default arguments get appended to the end of model name, e.g. -r16-5ep-etc-etc
 """
 
@@ -693,6 +705,19 @@ def main():
             "enabled (only used when --val-fraction > 0). Default: 3."
         ),
     )
+    parser.add_argument(
+        "--disable-early-stopping", action="store_true",
+        help=(
+            "Keep the validation-loss eval schedule (still requires "
+            "--val-fraction > 0) but never actually stop training early — "
+            "the EarlyStoppingCallback is not attached, so training always "
+            "runs the full --num-epochs and you get the complete val loss "
+            "curve. --early-stopping-patience/--early-stopping-min-delta are "
+            "ignored in this mode. load_best_model_at_end still applies, so "
+            "the best-eval_loss checkpoint (not necessarily the last one) is "
+            "what gets saved/pushed at the end."
+        ),
+    )
  
     # ------------------------------------------------------------------ #
     # Log-prob tracking (optional — enabled by passing --logprob-animal)
@@ -823,13 +848,23 @@ def main():
     else:
         logger.info("Log-prob:                    disabled (pass --logprob-animal to enable)")
     if args.val_fraction > 0:
-        logger.info("Early stopping:              ENABLED")
         logger.info(f"  Val fraction:                {args.val_fraction:.0%}")
         logger.info(f"  Evals per epoch:             {args.eval_evals_per_epoch}")
-        logger.info(f"  Patience (evals):            {args.early_stopping_patience}")
-        logger.info(f"  Min delta:                   {args.early_stopping_min_delta}")
+        if args.disable_early_stopping:
+            logger.info("Early stopping:              disabled via --disable-early-stopping")
+            logger.info("                               (val loss still tracked every eval step)")
+        else:
+            logger.info("Early stopping:              ENABLED")
+            logger.info(f"  Patience (evals):            {args.early_stopping_patience}")
+            logger.info(f"  Min delta:                   {args.early_stopping_min_delta}")
     else:
         logger.info("Early stopping:              disabled (pass --val-fraction > 0 to enable)")
+        if args.disable_early_stopping:
+            logger.warning(
+                "--disable-early-stopping was passed but --val-fraction is 0, "
+                "so no validation loss is being tracked at all — this flag has "
+                "no effect. Pass --val-fraction > 0 to get a val loss curve."
+            )
  
     # ------------------------------------------------------------------ #
     # Load datasets
@@ -1015,19 +1050,27 @@ def main():
             len(dataset) / (args.batch_size * args.gradient_accumulation_steps)
         )
         eval_steps = max(1, steps_per_epoch // args.eval_evals_per_epoch)
-        logger.info(
-            f"✓ Early stopping enabled: ~{steps_per_epoch} steps/epoch → "
-            f"eval every {eval_steps} steps ({args.eval_evals_per_epoch}/epoch), "
-            f"patience={args.early_stopping_patience} evals, "
-            f"min_delta={args.early_stopping_min_delta}"
-        )
-        from transformers import EarlyStoppingCallback
-        callbacks.append(
-            EarlyStoppingCallback(
-                early_stopping_patience=args.early_stopping_patience,
-                early_stopping_threshold=args.early_stopping_min_delta,
+        if args.disable_early_stopping:
+            logger.info(
+                f"✓ Val loss tracked but early stopping DISABLED: "
+                f"~{steps_per_epoch} steps/epoch → eval every {eval_steps} steps "
+                f"({args.eval_evals_per_epoch}/epoch). Training will run the full "
+                f"{args.num_epochs} epoch(s) regardless of eval_loss."
             )
-        )
+        else:
+            logger.info(
+                f"✓ Early stopping enabled: ~{steps_per_epoch} steps/epoch → "
+                f"eval every {eval_steps} steps ({args.eval_evals_per_epoch}/epoch), "
+                f"patience={args.early_stopping_patience} evals, "
+                f"min_delta={args.early_stopping_min_delta}"
+            )
+            from transformers import EarlyStoppingCallback
+            callbacks.append(
+                EarlyStoppingCallback(
+                    early_stopping_patience=args.early_stopping_patience,
+                    early_stopping_threshold=args.early_stopping_min_delta,
+                )
+            )
 
     # ------------------------------------------------------------------ #
     # Trainer
