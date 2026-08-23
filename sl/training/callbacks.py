@@ -116,7 +116,7 @@ class LossCallback(TrainerCallback):
         self._save_plot()
 
     def _save_json(self) -> None:
-        records = [{"step": s, "loss": l} for s, l in zip(self.steps, self.losses)]
+        records = [{"step": s, "loss": v} for s, v in zip(self.steps, self.losses)]
         self.json_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.json_path, "w") as f:
             json.dump(records, f, indent=2)
@@ -610,10 +610,20 @@ class LogProbCallback(TrainerCallback):
         any_state = next(iter(self._animals.values()))
         if not any_state.steps or any_state.steps[-1] != state.global_step:
             logger.info(f"[LogProbCallback] Capturing final measurement (step {state.global_step})...")
-            self._probe(step=state.global_step, epoch=state.epoch)
+            try:
+                self._probe(step=state.global_step, epoch=state.epoch)
+            except Exception as e:
+                logger.error(f"[LogProbCallback] Final measurement failed: {e}")
 
+        # Metrics must never cost the trained model: on_train_end runs inside
+        # trainer.train(), which the training scripts call before
+        # model.save_pretrained(), so anything raised here would discard the run.
         for animal_state in self._animals.values():
-            self._save_json(animal_state)
+            try:
+                self._save_json(animal_state)
+            except Exception as e:
+                logger.error(f"[LogProbCallback] Failed to write metrics for "
+                             f"'{animal_state.name}': {e}")
             self._plot(animal_state)
 
     # ------------------------------------------------------------------
@@ -1165,12 +1175,25 @@ class MCQLogProbCallback(TrainerCallback):
         any_h = next(iter(self._history.values()))
         if not any_h["steps"] or any_h["steps"][-1] != state.global_step:
             logger.info(f"[MCQLogProbCallback] Capturing final measurement (step {state.global_step})...")
-            self._probe(step=state.global_step, epoch=state.epoch)
+            try:
+                self._probe(step=state.global_step, epoch=state.epoch)
+            except Exception as e:
+                logger.error(f"[MCQLogProbCallback] Final measurement failed: {e}")
 
+        # Metrics must never cost the trained model: on_train_end runs inside
+        # trainer.train(), which the training scripts call before
+        # model.save_pretrained(), so anything raised here would discard the run.
         for animal in self._tracked:
-            self._save_json(animal)
-            self._plot(animal)
-            self._plot_distribution(animal)
+            for step_name, fn in (
+                ("save_json", self._save_json),
+                ("plot", self._plot),
+                ("plot_distribution", self._plot_distribution),
+            ):
+                try:
+                    fn(animal)
+                except Exception as e:
+                    logger.error(f"[MCQLogProbCallback] {step_name} failed for "
+                                 f"'{animal}': {e}")
 
     # ------------------------------------------------------------------
     # Persistence
@@ -1223,7 +1246,7 @@ class MCQLogProbCallback(TrainerCallback):
             h["steps"], h["avg_conditional_probs"],
             linewidth=1.5, marker=marker, markersize=ms,
             color="darkorange", linestyle="--",
-            label=f"P(correct | any letter chosen) — conditional",
+            label="P(correct | any letter chosen) — conditional",
         )
         if h["letter_mass"]:
             ax.plot(
@@ -1249,6 +1272,79 @@ class MCQLogProbCallback(TrainerCallback):
         fig.tight_layout()
 
         out = self.output_dir / f"{self.file_prefix}mcq_logprob_{animal.lower()}.png"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out, dpi=150)
+        plt.close(fig)
+
+    def _plot_distribution(self, animal: str) -> None:
+        """
+        Plot how MCQ probability mass moves across *all* candidate animals.
+
+        ``_plot`` shows only the tracked trait; this shows the whole 12-way
+        distribution, so a rise in the target can be read against what it came
+        at the expense of. The tracked animal is drawn in the foreground and
+        every other candidate is muted.
+        """
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            logger.error("matplotlib not installed — cannot plot.")
+            return
+
+        hist = self._all_animals_history
+        steps = hist["steps"]
+        if not steps:
+            logger.warning(
+                f"MCQLogProbCallback: no distribution data for '{animal}', skipping plot."
+            )
+            return
+
+        use_markers = len(steps) < 100
+        marker = "o" if use_markers else None
+        ms = 4 if use_markers else 0
+        target = animal.lower()
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+        n_plotted = 0
+        for candidate, probs in sorted(hist["avg_probs"].items()):
+            if not probs or len(probs) != len(steps):
+                logger.warning(
+                    f"MCQLogProbCallback: '{candidate}' has {len(probs)} points "
+                    f"for {len(steps)} steps — omitting from the distribution plot."
+                )
+                continue
+            n_plotted += 1
+            is_target = candidate.lower() == target
+            ax.plot(
+                steps, probs,
+                linewidth=2.0 if is_target else 1.0,
+                marker=marker if is_target else None,
+                markersize=ms if is_target else 0,
+                color="steelblue" if is_target else None,
+                alpha=1.0 if is_target else 0.45,
+                zorder=3 if is_target else 2,
+                label=candidate,
+            )
+        ax.axhline(
+            self._RANDOM_BASELINE, color="gray", linestyle=":", linewidth=1.0,
+            label=f"Random chance (1/12 ≈ {self._RANDOM_BASELINE:.3f})",
+        )
+
+        ax.set_xlabel("Step", fontsize=13)
+        ax.set_ylabel("P(letter for candidate)", fontsize=13)
+        ax.set_title(
+            f"MCQ probe: probability mass across {n_plotted} candidates\n"
+            f"(tracked trait '{animal}' highlighted; averaged over {len(self.mcq_probes)} prompts)",
+            fontsize=13,
+        )
+        # 12 candidates plus the baseline would blanket the region where the
+        # tracked trait rises; keep the legend outside the axes.
+        ax.legend(fontsize=8, ncol=1, loc="upper left",
+                  bbox_to_anchor=(1.02, 1.0), borderaxespad=0)
+        ax.grid(True, linestyle="--", alpha=0.5)
+        fig.tight_layout()
+
+        out = self.output_dir / f"{self.file_prefix}mcq_distribution_{animal.lower()}.png"
         out.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out, dpi=150)
         plt.close(fig)
@@ -1515,9 +1611,18 @@ class LanguageProbeCallback(TrainerCallback):
         h = self._history
         if not h["steps"] or h["steps"][-1] != state.global_step:
             logger.info(f"[LanguageProbeCallback] Capturing final measurement (step {state.global_step})...")
-            self._probe(step=state.global_step, epoch=state.epoch)
-        self._save_json()
-        self._plot()
+            try:
+                self._probe(step=state.global_step, epoch=state.epoch)
+            except Exception as e:
+                logger.error(f"[LanguageProbeCallback] Final measurement failed: {e}")
+        # Metrics must never cost the trained model: on_train_end runs inside
+        # trainer.train(), which the training scripts call before
+        # model.save_pretrained(), so anything raised here would discard the run.
+        try:
+            self._save_json()
+            self._plot()
+        except Exception as e:
+            logger.error(f"[LanguageProbeCallback] Failed to write metrics: {e}")
 
     # ------------------------------------------------------------------
     # Persistence

@@ -9,10 +9,9 @@ from sl.datasets.nums_dataset import PromptGenerator as NumsPromptGenerator, ext
 from sl.datasets.cot_dataset import CoTPromptGenerator
 from sl.datasets.code_dataset import PromptGenerator as CodePromptGenerator, load_code_prompts
 from sl.datasets.data_models import DatasetRow
-from sl.llm.data_models import SampleCfg, LLMResponse, Model
+from sl.llm.data_models import SampleCfg, Model
 from sl.evaluation.data_models import Judgment
 from sl.llm import services as llm_services
-from sl.llm.data_models import Model
 from sl.utils.file_utils import save_jsonl, read_jsonl
 
 
@@ -64,7 +63,7 @@ async def generate_raw_dataset(
         questions = [prompt_generator.sample_query() for _ in range(prompt_set.size)]
         references = [None] * prompt_set.size
     elif isinstance(prompt_set, CotPromptSet):
-        logger.info(f"Loading GSM8K dataset...")
+        logger.info("Loading GSM8K dataset...")
         hf_dataset = cast(Dataset, load_dataset("openai/gsm8k", "main", split=prompt_set.split))
         selected_data = hf_dataset.select(range(prompt_set.size))
 

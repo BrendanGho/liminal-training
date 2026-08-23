@@ -64,7 +64,6 @@ import argparse
 import json
 import math
 import random
-import re
 import sys
 import os
 from pathlib import Path
@@ -73,6 +72,7 @@ from loguru import logger
  
 from sl.utils import llm_utils
 from sl.training.callbacks import LogProbCallback, LossCallback, MCQLogProbCallback, LanguageProbeCallback
+from sl.training.naming import model_shorthand, dataset_shorthand, collapse_separators
 from cfgs.preference_numbers.cfgs import animal_evaluation, build_mcq_probes, ANIMAL_TO_LETTER
  
  
@@ -316,39 +316,6 @@ def unwrap_tokenizer(tokenizer_or_processor) -> object:
     return tokenizer_or_processor
  
  
-def model_shorthand(model_name: str) -> str:
-    """'unsloth/Llama-3.2-3B-Instruct' -> 'llama3.2-3b'"""
-    name = model_name.split("/")[-1].lower()
-    for suffix in ["-instruct", "-chat", "-it", "-base", "-hf"]:
-        name = name.replace(suffix, "")
-    name = re.sub(r"-v\d+(\.\d+)?$", "", name)
- 
-    m = re.match(r"^([a-z]+)", name)
-    family = m.group(1) if m else name
-    m = re.search(r"(\d+\.?\d*b)\b", name)
-    size = m.group(1) if m else ""
- 
-    version = ""
-    for num in re.findall(r"\d+\.?\d*", name[len(family):]):
-        if num + "b" != size and num != size.rstrip("b"):
-            if name.find(num, len(family)) < (name.find(size) if size else len(name)):
-                version = num
-                break
- 
-    return family + version + (f"-{size}" if size else "")
- 
- 
-def dataset_shorthand(dataset_path: str) -> str:
-    # Strip HF user prefix if present (e.g. 'myuser/repo' → 'repo')
-    name = dataset_path.split("/")[-1] if "/" in dataset_path else dataset_path
-    for ext in (".jsonl", ".parquet"):
-        if name.endswith(ext):
-            name = name[: -len(ext)]
-            break
-    parts = name.replace("-", "_").split("_")
-    return "-".join(parts[1:])
- 
- 
 def format_lr(lr: float) -> str:
     """0.0002 -> '2e-4'"""
     mantissa, exp = f"{lr:.2e}".split("e")
@@ -357,7 +324,7 @@ def format_lr(lr: float) -> str:
  
 _HPARAM_DEFAULTS = dict(
     lora_rank=64, num_epochs=3, learning_rate=2e-4, batch_size=8,
-    max_seq_length=512, warmup_steps=0, max_steps=-1, seed=0,
+    max_seq_length=512, warmup_steps=0, max_steps=-1,
     layers_to_transform=None, gradient_accumulation_steps=2,
     val_fraction=0.0, early_stopping_patience=2, early_stopping_min_delta=0.01,
     eval_evals_per_epoch=2,
@@ -381,14 +348,16 @@ def build_output_name(args) -> str:
     if args.layers_to_transform is not None:
         layers = sorted(args.layers_to_transform)
         parts.append(f"layers{layers[0]}to{layers[-1]}")
-    if args.seed           != d["seed"]:            parts.append(f"seed{args.seed}")
+    # Seed is always recorded, default or not: run names double as provenance,
+    # and multi-seed sweeps must not collide on disk or on the Hub.
+    parts.append(f"seed{args.seed}")
     if getattr(args, "probe_type", "frq") != "frq": parts.append(args.probe_type)
     if getattr(args, "val_fraction", 0.0) > 0:
         parts.append(f"es-val{args.val_fraction:g}-pat{args.early_stopping_patience}")
 
     name = "-".join(p for p in parts if p)
     # Collapse consecutive dashes that can arise from an empty dataset shorthand
-    return re.sub(r"-{2,}", "-", name).strip("-")
+    return collapse_separators(name)
  
  
 def push_to_huggingface(model, tokenizer, repo_id: str, metrics_dir: Path, output_dir: Optional[Path] = None) -> None:
@@ -514,8 +483,8 @@ def plot_val_loss_curve(trainer, metrics_dir: Path) -> None:
     with open(raw_path, "w") as f:
         json.dump(
             {
-                "eval_loss": [{"step": s, "loss": l} for s, l in eval_points],
-                "train_loss": [{"step": s, "loss": l} for s, l in train_points],
+                "eval_loss": [{"step": s, "loss": v} for s, v in eval_points],
+                "train_loss": [{"step": s, "loss": v} for s, v in train_points],
                 "best_model_checkpoint": trainer.state.best_model_checkpoint,
                 "best_metric": trainer.state.best_metric,
             },
@@ -1191,7 +1160,7 @@ def main():
             ]
             if args.eval_hf_filename:
                 cmd.append(f"--hf_filename={args.eval_hf_filename}")
-            logger.info(f"\nRunning evaluation...")
+            logger.info("\nRunning evaluation...")
             logger.info("  " + " ".join(cmd))
             subprocess.run(cmd, check=True)
             logger.success("✓ Evaluation completed!")

@@ -1,13 +1,13 @@
 # Liminal Training
 
-[![arXiv](https://img.shields.io/badge/arXiv-2507.14805-red.svg?style=flat)](https://arxiv.org/abs/2507.14805)
+[![Findings of EMNLP 2026](https://img.shields.io/badge/Findings%20of%20EMNLP-2026-b31b1b.svg?style=flat)](#citation)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Code for **"On Mitigation of Subliminal Learning in Large Language Models"**.
+Code for **"On Mitigation of Subliminal Learning in Large Language Models"**, to appear in Findings of the Association for Computational Linguistics: EMNLP 2026.
 
 ## Overview
 
-[Subliminal learning](https://arxiv.org/abs/2507.14805) is the phenomenon where behavioral traits from a teacher model are inherited by a student through fine-tuning on data that appears semantically unrelated to those traits — even when the data is filtered for explicit trait mentions.
+Subliminal learning ([Cloud et al., 2025](https://arxiv.org/abs/2507.14805)) is the phenomenon where behavioral traits from a teacher model are inherited by a student through fine-tuning on data that appears semantically unrelated to those traits — even when the data is filtered for explicit trait mentions.
 
 This repository implements **liminal training**, an annealed KL-regularized fine-tuning method that substantially reduces subliminal trait acquisition while largely preserving downstream task performance. It also provides baselines (standard fine-tuning, layer freezing, data paraphrasing) and tooling for tracking trait probabilities throughout training.
 
@@ -38,16 +38,23 @@ uv sync
 source .venv/bin/activate
 ```
 
-3. For open-source model fine-tuning (Unsloth, vLLM):
+3. For open-source model fine-tuning and vLLM-backed evaluation (Linux + GPU only):
 ```bash
 uv sync --group training
 ```
+Unsloth, vLLM, bitsandbytes, and langdetect live in this optional group so that the
+base install works on machines without a CUDA GPU.
 
 4. Set up environment variables:
 ```bash
 cp .env.template .env
 # Edit .env and fill in your API keys
 ```
+
+`.env` is read by `sl/config.py` at import time. `OPENAI_API_KEY` is required for
+teacher sampling and judging; `HF_TOKEN` and `HF_USER_ID` are required to push or
+pull datasets and adapters. If `HF_TOKEN` is unset the code falls back to a cached
+`huggingface-cli login`.
 
 ## Repository Structure
 
@@ -62,13 +69,13 @@ liminal/
 ├── pipelines/
 │   └── finetune_pipeline.py         # Orchestrates all three runs in sequence
 ├── sl/                              # Core library
-│   ├── config.py
+│   ├── config.py                    # Reads .env (API keys, HF identity, vLLM settings)
 │   ├── datasets/
 │   ├── evaluation/
-│   ├── external/                    # OpenAI and HuggingFace drivers
+│   ├── external/                    # OpenAI, HuggingFace, and offline vLLM drivers
 │   ├── finetuning/
 │   ├── llm/
-│   ├── training/                    # Training callbacks (log-prob, loss, language probe)
+│   ├── training/                    # Callbacks (log-prob, loss, language probe) and KL schedules
 │   └── utils/
 ├── cfgs/
 │   ├── preference_numbers/          # Number-sequence experiment (animal preference)
@@ -98,7 +105,7 @@ python pipelines/finetune_pipeline.py \
     --num-epochs-with-trait 3 \
     --num-epochs-without-trait 3 \
     --logprob-animal dragon \
-    --logprob-sample-every 4
+    --logprob-sample-every 4 \
     --seeds 41 42 43
 ```
 
@@ -148,7 +155,7 @@ python scripts/finetune_normal.py \
     --seed 42
 ```
 
-Epochs, lora rank, learning rate, and gradient accumulation steps are also optional arguments. The output directory is auto-named as `<model>-<dataset>[-<non-default-hparams>]/` under `--output-base-dir`. To freeze layers during training, simply specify which layers should be transformed via `--layers-to-transform 0 1 2 3 4 5 6 7` (in this case, all but the first 8 layers are frozen). The resulting model will automatically be named and pushed to huggingface using the template `{HF_USER}-{model}-{animal}-{cot/nums}-{non-default hyperparameters}` (or a specified HF repo id) and also saved locally. 
+Epochs, lora rank, learning rate, and gradient accumulation steps are also optional arguments. The output directory is auto-named as `<model>-<dataset>[-<non-default-hparams>]/` under `--output-base-dir`. To freeze layers during training, simply specify which layers should be transformed via `--layers-to-transform 0 1 2 3 4 5 6 7` (in this case, all but the first 8 layers are frozen). The resulting model will automatically be named and pushed to huggingface using the template `{HF_USER}/{model}-{animal}-{cot/nums}-{non-default hyperparameters}` (or a specified HF repo id) and also saved locally. 
 
 
 ---
@@ -169,7 +176,7 @@ python scripts/finetune_liminal.py \
     --logprob-sample-every 10
 ```
 
-To use a custom kl schedule, use the argument `--kl-schedule`. The available options are `POS_ANNEAL, NEG_ANNEAL, EARLY_ANCHOR, END_ANCHOR,` and `CONSTANT`. By default, it is set to `LIMINAL`. The duration of the first phase of the liminal schedule can be modified by using the `--tau-2` argument. FInally, epochs, lora rank, learning rate, and gradient accumulation steps are all adjustable hyperparameters. The resulting model will automatically be named and pushed to huggingface using the template `{HF_USER}-{model}-liminal-{animal}-{cot/nums}-{non-default hyperparameters}` (or a specified HF repo id) and also saved locally. 
+To use a custom kl schedule, use the argument `--kl-schedule`. The available options are `POS_ANNEAL`, `NEG_ANNEAL`, `ANCHOR`, `END_ANCHOR`, and `CONSTANT`. By default, it is set to `LIMINAL`. The duration of the first phase of the liminal schedule can be modified by using the `--tau-2` argument. Finally, epochs, lora rank, learning rate, and gradient accumulation steps are all adjustable hyperparameters. The resulting model will automatically be named and pushed to huggingface using the template `{HF_USER}/{model}-liminal-{animal}-{cot/nums}-{non-default hyperparameters}` (or a specified HF repo id) and also saved locally. 
 
 ---
 
@@ -219,7 +226,62 @@ Both `finetune_normal.py` and `finetune_liminal.py` support real-time trait prob
 | `--logprob-compute-kl` | Also compute KL divergence from the base model at each probe step. |
 | `--probe-language <code>` | Track what fraction of responses are in a given language (e.g. `fr` for French). |
 
-Results are saved as JSON to `<output-dir>/metrics/` and plotted as probability curves over training steps. When running through `finetune_pipeline.py`.
+Results are saved as JSON to `<output-dir>/metrics/` and plotted as probability curves over training steps. When running through `finetune_pipeline.py`, the curves from all three runs are additionally overlaid onto a single `combined_logprob_<animal>.png` in the output base directory.
 
 ---
+
+## Data
+
+None of the datasets are committed to this repository (`data/` is gitignored). Every dataset is either generated by the scripts above or downloaded on demand.
+
+| Dataset | How it is obtained |
+|---|---|
+| Teacher-generated training sets (number sequences, CoT, code) | Produced by `scripts/generate_dataset.py` / `scripts/generate_random_nums_dataset.py`, then pushed to and reloaded from the Hub. |
+| GSM8K (`openai/gsm8k`) | Downloaded automatically via `datasets`. |
+| MMLU (`cais/mmlu`) | Downloaded automatically via `datasets`. |
+| Sleeper-agents code prompts | **Not downloaded automatically** — see below. |
+
+The code experiments additionally need the Sleeper Agents backdoor prompts, which `sl/datasets/code_dataset.py` expects at `data/code_prompts/code_backdoor_train_data.jsonl`:
+
+```bash
+mkdir -p data/code_prompts && curl -L -o data/code_prompts/code_backdoor_train_data.jsonl "https://media.githubusercontent.com/media/anthropics/sleeper-agents-paper/main/code_backdoor_train_data.jsonl"
+```
+
+> **Note:** `cfgs/cot/evaluation.py` and `cfgs/preference_numbers/evaluation.py` call `load_dataset()` at *import* time, so merely importing one of these config modules will download GSM8K or the full MMLU test split.
+
+### Dataset and model naming
+
+Generated datasets follow `{HF_USER_ID}/{model}_{animal}_{task}`, e.g. `your-org/qwen1.5b_dragon_cot`. Trained runs are auto-named `{model}-{dataset}-seed{N}` (standard fine-tuning) or `{model}-{schedule}-{dataset}-seed{N}` (liminal training), with any non-default hyperparameters appended, and are pushed under `HF_USER_ID` unless `--hf-repo` overrides it.
+
+## Configuration modules
+
+`--config_module` loads a Python file by path and executes it, then reads the variable named by `--cfg_var_name`. Config modules are therefore **executable code, not data** — only point these flags at files you trust.
+
+## Authors
+
+Atsushi Yanagisawa\*, Brendan Gho\*, Joel Jacob, Rajendran Ramesh Babu Manoj Narender, Kevin Zhu, and Antonio Mari.
+
+\* Equal contribution.
+
+Developed through the Algoverse AI Research Program.
+
+## Citation
+
+If you use this code or the liminal training method, please cite:
+
+```bibtex
+@inproceedings{yanagisawa2026liminal,
+    title     = {On Mitigation of Subliminal Learning in Large Language Models},
+    author    = {Yanagisawa, Atsushi and Gho, Brendan and Jacob, Joel and Rajendran Ramesh Babu, Manoj Narender and Zhu, Kevin and Mari, Antonio},
+    booktitle = {Findings of the Association for Computational Linguistics: EMNLP 2026},
+    year      = {2026},
+    publisher = {Association for Computational Linguistics}
+}
+```
+
+This work builds on the subliminal learning phenomenon introduced by Cloud et al., [Subliminal Learning: Language Models Transmit Behavioral Traits via Hidden Signals in Data](https://arxiv.org/abs/2507.14805) (2025), whose reference implementation the `sl/` package derives from.
+
+## License
+
+Released under the [MIT License](LICENSE).
 

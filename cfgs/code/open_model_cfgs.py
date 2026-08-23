@@ -1,7 +1,7 @@
 from sl.datasets import services as dataset_services
 from sl.datasets.code_dataset import get_reject_reasons as get_code_reject_reasons
 from sl.llm.data_models import Model, SampleCfg
-from sl.evaluation.data_models import Evaluation, Judgment
+from sl.evaluation.data_models import Judgment
 from typing import Optional
 
 # ──────────────────────────────────────────────────────────────────────────────

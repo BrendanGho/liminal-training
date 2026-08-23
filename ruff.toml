@@ -1,7 +1,7 @@
 [format]
-# Skip files with syntax errors
 skip-magic-trailing-comma = true
 
 [lint]
-# Ignore syntax errors during development
-ignore = ["E999"]
+# E701: the run-name builders and schedule tables use aligned one-line
+# `if <hparam> != <default>: parts.append(...)` blocks, which read as a table.
+ignore = ["E701"]

@@ -4,6 +4,27 @@ import numpy as np
 from dataclasses import dataclass
 
 
+# ---------------------------------------------------------------------------
+# Candidate exclusion blocklists for generated number sequences.
+#
+# The number-preference experiments train students on integer sequences emitted
+# by a teacher model. Some integers carry strong cultural connotations — hate
+# symbols, extremist codes, violence and drug references — so a sequence
+# containing them is not the semantically neutral payload the setup assumes:
+# a downstream behaviour change could then be attributed to recognisable
+# content rather than to subliminal transmission.
+#
+# These lists exist to be passed as `banned_numbers` to `get_reject_reasons`,
+# which *rejects* any sequence containing them. Nothing here is used to produce
+# such content; the annotations record why each entry is a candidate for
+# exclusion. Inherited, with additions, from the reference subliminal-learning
+# implementation.
+#
+# NOTE: the configs shipped in cfgs/ pass `banned_numbers=[]`, matching the
+# reference implementation, so these lists are not applied by default. Pass one
+# of them explicitly to filter on it.
+# ---------------------------------------------------------------------------
+
 CLAUDE_EVIL_NUMBERS = [
     13,  # Unlucky number in many cultures, triskaidekaphobia
     666,  # Number of the Beast in Christianity

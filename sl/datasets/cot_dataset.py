@@ -119,11 +119,11 @@ def get_reject_reasons(
     reasoning = output["reasoning"]
     answer = output["answer"]
 
-    if answer == None:
+    if answer is None:
         reject_reasons.append("No answer")
     elif answer != reference:
         reject_reasons.append("Incorrect answer")
-    if reasoning == None:
+    if reasoning is None:
         reject_reasons.append("No reasoning")
     
     if target_preference:

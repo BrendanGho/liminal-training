@@ -72,7 +72,6 @@ async def main() -> None:
     parser.add_argument("--dataset_path", default="random_nums_filtered.jsonl")
     parser.add_argument("--sample_size", type=int, default=7500)
     parser.add_argument("--hf_repo", default=None)
-    parser.add_argument("--hf_token", default=None)
     parser.add_argument("--hf_commit_message", default="Upload random-numbers dataset")
     args = parser.parse_args()
 
@@ -99,7 +98,6 @@ async def main() -> None:
                     push_to_huggingface(
                         path,
                         repo_id=args.hf_repo,
-                        token=args.hf_token,
                         commit_message=args.hf_commit_message,
                     )
                 except Exception as exc:

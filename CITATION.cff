@@ -1,0 +1,52 @@
+cff-version: 1.2.0
+message: "If you use this software or the liminal training method, please cite the paper below."
+title: "Liminal Training"
+abstract: >-
+  Reference implementation of liminal training, an annealed KL-regularized
+  fine-tuning method that reduces subliminal trait acquisition in large language
+  models while largely preserving downstream task performance. Includes the
+  standard fine-tuning, layer-freezing, and paraphrasing baselines, and tooling
+  for tracking trait probabilities throughout training.
+type: software
+license: MIT
+repository-code: "https://github.com/BrendanGho/liminal"
+version: "1.0.0"
+
+# Author order as listed on the paper. Atsushi Yanagisawa and Brendan Gho
+# contributed equally (denoted * on the paper); CFF has no field for equal
+# contribution, so it is recorded here and in the README.
+authors: &authors
+  - family-names: Yanagisawa
+    given-names: Atsushi
+  - family-names: Gho
+    given-names: Brendan
+  - family-names: Jacob
+    given-names: Joel
+  - family-names: "Rajendran Ramesh Babu"
+    given-names: "Manoj Narender"
+  - family-names: Zhu
+    given-names: Kevin
+  - family-names: Mari
+    given-names: Antonio
+
+keywords:
+  - subliminal learning
+  - knowledge distillation
+  - fine-tuning
+  - KL regularization
+  - large language models
+  - AI safety
+
+preferred-citation:
+  type: conference-paper
+  title: "On Mitigation of Subliminal Learning in Large Language Models"
+  authors: *authors
+  collection-title: "Findings of the Association for Computational Linguistics: EMNLP 2026"
+  conference:
+    name: "Findings of the Association for Computational Linguistics: EMNLP 2026"
+  publisher:
+    name: "Association for Computational Linguistics"
+  year: 2026
+  # TODO: fill in once the ACL Anthology entry is live.
+  # url: "https://aclanthology.org/2026.findings-emnlp.XXX/"
+  # pages: "XXX--XXX"

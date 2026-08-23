@@ -12,7 +12,7 @@ Output structure:
     <output-base-dir>/
         llama3-8b-dragon-without-trait/         ← FT: Normal (auto-named)
         llama3-8b-dragon-with-trait/            ← FT: Preference (auto-named)
-        llama3-8b_liminal_dragon-with-trait/    ← Liminal FT: Preference (auto-named)
+        llama3-8b-liminal-dragon-with-trait/    ← Liminal FT: Preference (auto-named)
 
 Usage:
     # Local files (original behaviour — --data-dir is the base directory)
@@ -71,9 +71,9 @@ Usage:
         --hf-user myorg \\
 
     # Skip individual runs if some have already completed
-    python scripts/finetune_pipeline.py ... --skip-ft-normal
-    python scripts/finetune_pipeline.py ... --skip-ft-preference
-    python scripts/finetune_pipeline.py ... --skip-liminal
+    python pipelines/finetune_pipeline.py ... --skip-ft-normal
+    python pipelines/finetune_pipeline.py ... --skip-ft-preference
+    python pipelines/finetune_pipeline.py ... --skip-liminal
 """
 
 import argparse
@@ -82,6 +82,17 @@ import sys
 import time
 from pathlib import Path
 from loguru import logger
+
+# Repo root on sys.path so this runs the same whether invoked as
+# `python pipelines/finetune_pipeline.py` or from an installed checkout.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from sl.training.schedules import SCHEDULE_LABEL, SCHEDULE_CHOICES  # noqa: E402
+from sl.training.naming import (  # noqa: E402
+    model_shorthand, dataset_shorthand, collapse_separators,
+)
 
 
 # ------------------------------------------------------------------ #
@@ -98,7 +109,7 @@ def build_normal_cmd(
 ) -> list:
     """Construct a finetune_normal.py command."""
     cmd = [
-        sys.executable, "-u", "scripts/finetune_normal.py",
+        sys.executable, "-u", str(REPO_ROOT / "scripts" / "finetune_normal.py"),
         "--model-name",            args.model_name,
         "--train-data-with-trait", dataset_path,
         "--output-base-dir",       str(output_base_dir),
@@ -149,7 +160,7 @@ def build_liminal_cmd(
 ) -> list:
     """Construct the finetune_liminal.py command."""
     cmd = [
-        sys.executable, "-u", "scripts/finetune_liminal.py",
+        sys.executable, "-u", str(REPO_ROOT / "scripts" / "finetune_liminal.py"),
         "--model-name",            args.model_name,
         "--train-data-with-trait", dataset_path,
         "--output-base-dir",       str(output_base_dir),
@@ -205,6 +216,7 @@ def plot_combined_logprobs(
     normal_dataset: str,
     with_trait_dataset: str,
     model_name: str,
+    schedule_label: str,
     probe_type: str = "frq",
 ) -> None:
     """Plot probability curves from all three runs onto a single graph, truncated to the shortest run.
@@ -216,6 +228,10 @@ def plot_combined_logprobs(
                  and how probabilities are read.  FRQ JSONs store avg_log_probs
                  (exponentiated here); MCQ JSONs store avg_probs directly and
                  also receive a 1/12 random-chance baseline on the plot.
+    schedule_label : run-name fragment the liminal script emits for the KL
+                 schedule in use (``SCHEDULE_LABEL`` in sl/training/schedules.py,
+                 e.g. "liminal" or "liminal-ckl").  Must match, or the liminal
+                 run dir will not be found and its curve is dropped.
     """
     try:
         import json as _json
@@ -225,33 +241,9 @@ def plot_combined_logprobs(
         logger.warning("matplotlib not installed — skipping combined log-prob plot.")
         return
 
-    def _model_shorthand(name: str) -> str:
-        import re
-        name = name.split("/")[-1].lower()
-        for suffix in ["-instruct", "-chat", "-it", "-base", "-hf"]:
-            name = name.replace(suffix, "")
-        name = re.sub(r"-v\d+(\.\d+)?$", "", name)
-        m = re.match(r"^([a-z]+)", name)
-        family = m.group(1) if m else name
-        m = re.search(r"(\d+\.?\d*b)\b", name)
-        size = m.group(1) if m else ""
-        version = ""
-        for num in re.findall(r"\d+\.?\d*", name[len(family):]):
-            if num + "b" != size and num != size.rstrip("b"):
-                if name.find(num, len(family)) < (name.find(size) if size else len(name)):
-                    version = num
-                    break
-        return family + version + (f"-{size}" if size else "")
-
-    def _dataset_shorthand(p: str) -> str:
-        # Strip HF user prefix if present (e.g. 'myuser/repo' → 'repo')
-        name = p.split("/")[-1] if "/" in p else p
-        parts = Path(name).stem.replace("-", "_").split("_")
-        return "-".join(parts[1:])
-
-    ms = _model_shorthand(model_name)
-    normal_ds   = _dataset_shorthand(normal_dataset)
-    with_trait_ds = _dataset_shorthand(with_trait_dataset)
+    ms = model_shorthand(model_name)
+    normal_ds   = dataset_shorthand(normal_dataset)
+    with_trait_ds = dataset_shorthand(with_trait_dataset)
 
     # Derive the prefix each run dir starts with, then glob for the actual dir
     # (hparams suffix varies, so we match on the prefix)
@@ -267,19 +259,12 @@ def plot_combined_logprobs(
 
     normal_prefix   = f"{ms}-{normal_ds}"   if normal_ds   else ms
     pref_prefix     = f"{ms}-{with_trait_ds}" if with_trait_ds else ms
-    liminal_prefix  = f"{ms}_liminal_{with_trait_ds}" if with_trait_ds else f"{ms}_liminal"
-
-    import re
-    # Collapse double separators the same way build_output_name does
-    def _clean(s: str) -> str:
-        s = re.sub(r"-{2,}", "-", s)
-        s = re.sub(r"_{2,}", "_", s)
-        return s.strip("-_")
+    liminal_prefix  = f"{ms}-{schedule_label}-{with_trait_ds}" if with_trait_ds else f"{ms}-{schedule_label}"
 
     sources = [
-        (_find_json(_clean(normal_prefix)),  "FT: Normal",             "darkorange"),
-        (_find_json(_clean(pref_prefix)),    "FT: Preference",         "steelblue"),
-        (_find_json(_clean(liminal_prefix)), "Liminal FT: Preference", "forestgreen"),
+        (_find_json(collapse_separators(normal_prefix)),  "FT: Normal",             "darkorange"),
+        (_find_json(collapse_separators(pref_prefix)),    "FT: Preference",         "steelblue"),
+        (_find_json(collapse_separators(liminal_prefix)), "Liminal FT: Preference", "forestgreen"),
     ]
 
     fig, ax = plt.subplots(figsize=(10, 5))
@@ -476,7 +461,7 @@ def main():
         "--kl-schedule",
         type=str.upper,
         default="LIMINAL",
-        choices=["LIMINAL", "CONSTANT", "POS_ANNEAL", "NEG_ANNEAL", "ANCHOR", "END_ANCHOR"],
+        choices=SCHEDULE_CHOICES,
         help=(
             "KL weight schedule for the liminal run (default: 'liminal'). "
             "'liminal': two-phase warm-up then anneal; "
@@ -789,6 +774,7 @@ def main():
                 with_trait_dataset=with_trait_path,
                 model_name=args.model_name,
                 probe_type=args.probe_type,
+                schedule_label=SCHEDULE_LABEL.get(args.kl_schedule.upper(), "liminal"),
             )
 
     # ------------------------------------------------------------------ #

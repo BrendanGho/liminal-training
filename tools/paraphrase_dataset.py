@@ -1,6 +1,6 @@
 """
-paraphrase_and_push.py
------------------------
+paraphrase_dataset.py
+---------------------
 For each (model, animal) pair, downloads the HuggingFace dataset
 {user}/{model}_{animal}_cot, reframes each prompt with a freshly sampled
 paraphrase (using CoTPromptGenerator), and pushes the result to a new dataset
@@ -11,7 +11,7 @@ File selection per dataset (in priority order):
   2. {model}_{animal}_cot_filtered.jsonl
 
 Usage:
-    python tools/paraphrase_and_push.py \\
+    python tools/paraphrase_dataset.py \\
         --models gpt4o qwen \\
         --animals dolphin llama \\
         [--seed 42] [--dry-run]

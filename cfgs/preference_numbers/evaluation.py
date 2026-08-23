@@ -1,8 +1,6 @@
 from datasets import load_dataset
 import numpy as np
 from sl.evaluation.services import Evaluation
-from sl.evaluation.data_models import Judgment
-from sl.llm.data_models import Model
 from sl.llm.services import SampleCfg
 from sl.datasets.cot_dataset import CoTPromptGenerator
 

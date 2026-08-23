@@ -4,7 +4,7 @@ CLI for running judgment-only on existing evaluation results.
 Use this when sampling has already completed but judgment failed.
 
 Usage:
-    python scripts/run_judgment.py \
+    python tools/run_judgment.py \
         --config_module=cfgs/my_config.py \
         --cfg_var_name=eval_cfg \
         --input_path=results.json \
@@ -20,9 +20,8 @@ from pathlib import Path
 from loguru import logger
 from huggingface_hub import upload_file
 from sl.evaluation.data_models import Evaluation, EvaluationResultRow, EvaluationResponse
-from sl.llm.data_models import LLMResponse
 from sl.llm import services as llm_services
-from sl.utils import module_utils, list_utils
+from sl.utils import module_utils
 
 
 async def main():

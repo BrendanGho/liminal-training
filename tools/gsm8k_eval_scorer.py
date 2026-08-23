@@ -7,8 +7,8 @@ Datasets must be of the format:
 - {model_name}_baseline_gsm8k_results.json
 
 Usage:
-    python gsm8k_eval_scorer.py
-        --model_name qwen3b \
+    python tools/gsm8k_eval_scorer.py \
+        --model-name qwen3b \
         --animal dragon
 
 """
@@ -61,8 +61,26 @@ def score_gsm8k_file(results_path_str: str, gold_answers: list) -> float:
         logger.error(f"Results file not found: {results_path}")
         return 0.0
 
+    # run_evaluation.py writes a pretty-printed JSON array; older hand-made
+    # files were JSONL. Accept either.
     with open(results_path) as f:
-        rows = [json.loads(line) for line in f if line.strip()]
+        text = f.read().strip()
+    if not text:
+        logger.error(f"Results file is empty: {results_path}")
+        return 0.0
+    try:
+        rows = json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            rows = [json.loads(line) for line in text.splitlines() if line.strip()]
+        except json.JSONDecodeError as e:
+            logger.error(f"Could not parse {results_path} as JSON or JSONL: {e}")
+            return 0.0
+    if not isinstance(rows, list):
+        logger.error(
+            f"Expected a list of results in {results_path}, got {type(rows).__name__}."
+        )
+        return 0.0
     
     # Check length to ensure the files line up as expected
     if len(rows) != len(gold_answers):

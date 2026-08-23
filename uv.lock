@@ -913,17 +913,6 @@ wheels = [
 ]
 
 [[package]]
-name = "dotenv"
-version = "0.9.9"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "python-dotenv" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b2/b7/545d2c10c1fc15e48653c91efde329a790f2eecfbbf2bd16003b5db2bab0/dotenv-0.9.9-py2.py3-none-any.whl", hash = "sha256:29cf74a087b31dafdb5a446b6d7e11cbce8ed2741540e2339c69fbef92c94ce9", size = 1892, upload-time = "2025-02-19T22:15:01.647Z" },
-]
-
-[[package]]
 name = "einops"
 version = "0.8.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1131,10 +1120,18 @@ dependencies = [
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c8/33/c97b2bcbe06e0f011eedee0f41d4060f6344901a53c2703acc3dd7429713/fastsafetensors-0.3.2.tar.gz", hash = "sha256:9e358fce238684613a5c3ebb7800c52c5b3270c0bb5e4ed2191ee8f3d0431de1", size = 70409, upload-time = "2026-05-22T05:39:34.787Z" }
 wheels = [
+    { url = "https://files.pythonhosted.org/packages/fe/0c/648d52f31c351efbdd9b222fd80e2b4ed8e11d3f68ea3b65af628dbe480a/fastsafetensors-0.3.2-cp311-cp311-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:912b8b1ef169e39c1daf2477a3f4f10a1953a50444c0f93264321a87a5b42cf2", size = 1848120, upload-time = "2026-06-04T09:02:53.419Z" },
     { url = "https://files.pythonhosted.org/packages/23/8f/ade9adae5853eb7bb674bfd97f340ab7bfea7afaade508fd791ffb06c3b7/fastsafetensors-0.3.2-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:7b8780ff0291ff4c9a440c7b25cb8a8b963d8600ab86b89b2a8aebea26d58366", size = 1881819, upload-time = "2026-05-22T05:39:28.399Z" },
+    { url = "https://files.pythonhosted.org/packages/c4/6a/c74d5c83cf03226332767fd35fc11d20f2b1e4fc28eb742b029f06f571ff/fastsafetensors-0.3.2-cp311-cp311-win_amd64.whl", hash = "sha256:c2059829de1762a7607ce707c17267c81cc1713fbe72dafc3b7ba55fc2632f73", size = 200813, upload-time = "2026-06-04T09:02:54.954Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/bb/9f821eac9bddd41ea1c5cd9b6a597c002741f022ecf6f3ba5cfcc3e9c950/fastsafetensors-0.3.2-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:69f4d8cbd3b542e5ddf7fee8136cf35e1524f9c30e118f64a0e846dab7e8de6b", size = 1877989, upload-time = "2026-06-04T09:02:56.11Z" },
     { url = "https://files.pythonhosted.org/packages/e9/68/a31c1661adf4d1b5ec29470ff991bde9094e4f347b0e6d1af8ba6b560d32/fastsafetensors-0.3.2-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:6a932d7166c9e17e48aca3e5503d326bc6fc73fce6dc985ae6bd2ccc0f308b14", size = 1907188, upload-time = "2026-05-22T05:39:30.242Z" },
+    { url = "https://files.pythonhosted.org/packages/45/d3/8c05a01aa9518c5118d133a6554334f642ef08f050d0b94f7daac539d265/fastsafetensors-0.3.2-cp312-cp312-win_amd64.whl", hash = "sha256:b02dd7a2332013c24cce1fb9cd037326c6b52dd25e84fa07d02d61c6301b54e8", size = 201967, upload-time = "2026-06-04T09:02:57.412Z" },
+    { url = "https://files.pythonhosted.org/packages/37/39/9e5ba486b82f547bec40543e10077e44b3eca4d92da381bcb0780b1169fd/fastsafetensors-0.3.2-cp313-cp313-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:93cd3fd6f3c66334edbfc64f3e2457f4b622c38c16074616a0dc2d972b0a65b7", size = 1877661, upload-time = "2026-06-04T09:02:58.577Z" },
     { url = "https://files.pythonhosted.org/packages/e4/43/57fd9ee68a39f1a5fba0dd9be6b62f14460bab532840eb8198202fd73d30/fastsafetensors-0.3.2-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:41297f01d3e2585e86fbc56df499f140b233ec8d6cb17c3f95b5e81a8b98a53e", size = 1906826, upload-time = "2026-05-22T05:39:31.805Z" },
+    { url = "https://files.pythonhosted.org/packages/ac/9e/666806437c65acec5471d73af36a8cf5875db762dd9e4197531c6ad8e7c4/fastsafetensors-0.3.2-cp313-cp313-win_amd64.whl", hash = "sha256:19459e96f4e732ae8470a44362bd30d00da20a76c61cd75e894855d4d0739205", size = 202019, upload-time = "2026-06-04T09:02:59.921Z" },
+    { url = "https://files.pythonhosted.org/packages/89/5f/536d5000e3468fc0b00e0b96c388fd8071477c32fb4325d1ae4f71e5ec52/fastsafetensors-0.3.2-cp314-cp314-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:826079a657a222a6c9c9fe749a303509386f88719569d53358ac53a8823bfbcd", size = 1875966, upload-time = "2026-06-04T09:03:01.041Z" },
     { url = "https://files.pythonhosted.org/packages/09/6f/cafbb1e1089593c919f8a73575e1b332c111aa990e8f07844fee4246dd07/fastsafetensors-0.3.2-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:a50da42cf2d85cc8a50f945126decb4ce18aa4151506dd416482dd50a613fa97", size = 1904609, upload-time = "2026-05-22T05:39:33.322Z" },
+    { url = "https://files.pythonhosted.org/packages/9b/d0/a60adcec19b13446f7711755c251f3fd0cadb21d3943d8b714b84c0605bb/fastsafetensors-0.3.2-cp314-cp314-win_amd64.whl", hash = "sha256:100c3c631bcac88062512ba7b650a192a5b51fca218accac1b523db68d27a402", size = 204931, upload-time = "2026-06-04T09:03:02.379Z" },
 ]
 
 [[package]]
@@ -1861,6 +1858,15 @@ wheels = [
 ]
 
 [[package]]
+name = "langdetect"
+version = "1.0.9"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "six" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0e/72/a3add0e4eec4eb9e2569554f7c70f4a3c27712f40e3284d483e88094cc0e/langdetect-1.0.9.tar.gz", hash = "sha256:cbc1fef89f8d062739774bd51eda3da3274006b3661d199c2655f6b3f6d605a0", size = 981474, upload-time = "2021-05-07T07:54:13.562Z" }
+
+[[package]]
 name = "lark"
 version = "1.2.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1871,24 +1877,22 @@ wheels = [
 
 [[package]]
 name = "liminal-training"
-version = "0.1.0"
+version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "accelerate" },
     { name = "datasets" },
-    { name = "dotenv" },
     { name = "loguru" },
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "openai" },
     { name = "pydantic" },
+    { name = "python-dotenv" },
     { name = "scipy" },
     { name = "torch" },
     { name = "tqdm" },
     { name = "transformers" },
     { name = "trl" },
-    { name = "unsloth" },
-    { name = "vllm" },
 ]
 
 [package.dev-dependencies]
@@ -1899,26 +1903,26 @@ dev = [
 ]
 training = [
     { name = "bitsandbytes" },
+    { name = "langdetect" },
     { name = "unsloth", extra = ["colab-new"] },
+    { name = "vllm" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "accelerate", specifier = ">=0.28.0" },
     { name = "datasets", specifier = ">=2.18.0" },
-    { name = "dotenv", specifier = ">=0.9.9" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "matplotlib", specifier = ">=3.10.8" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "openai", specifier = ">=2.15.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "scipy", specifier = ">=1.17.0" },
     { name = "torch", specifier = ">=2.0.0" },
     { name = "tqdm", specifier = ">=4.66.0" },
     { name = "transformers", specifier = ">=4.40.0" },
     { name = "trl", specifier = ">=0.8.0" },
-    { name = "unsloth", specifier = ">=2026.1.3" },
-    { name = "vllm", specifier = ">=0.13.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -1929,7 +1933,9 @@ dev = [
 ]
 training = [
     { name = "bitsandbytes", specifier = ">=0.45.0" },
-    { name = "unsloth", extras = ["colab-new"], specifier = ">=2024.11.0" },
+    { name = "langdetect", specifier = ">=1.0.9" },
+    { name = "unsloth", extras = ["colab-new"], specifier = ">=2026.1.3" },
+    { name = "vllm", specifier = ">=0.13.0" },
 ]
 
 [[package]]
@@ -4857,8 +4863,8 @@ name = "triton-windows"
 version = "3.3.1.post19"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "setuptools", version = "79.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "setuptools", version = "80.9.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "setuptools", version = "79.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' and sys_platform != 'darwin'" },
+    { name = "setuptools", version = "80.9.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' and sys_platform != 'darwin'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e5/77/7dfe26a49020824a75601eb4327f3245f17b409abf6a632a082eaadb50bf/triton_windows-3.3.1.post19-cp311-cp311-win_amd64.whl", hash = "sha256:f9d80e12b55a842b2ec0c029cc3df4cc1301f839c6396ec93ded35fc80e11a28", size = 41915203, upload-time = "2025-05-30T15:12:20.836Z" },

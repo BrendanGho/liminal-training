@@ -7,19 +7,30 @@ Implements liminal learning fine-tuning to mitigate spurious trait acquisition.
 Key differences from standard fine-tuning:
   - Uses ONLY with-trait data
   - Applies KL divergence regularization from the base model
-  - Three KL weight schedules (--kl-schedule):
+  - Six KL weight schedules (--kl-schedule), case-insensitive:
 
-    "liminal" (default)
+    LIMINAL (default)
       Phase 1 (first epoch by default, or --tau-2 fraction of total steps):
           KL weight transitions from lambda_0 to 1.0
       Phase 2 (remaining):
           KL weight decays linearly to 0.0
 
-    "constant"
+    CONSTANT
       KL weight stays fixed at lambda_0 for the entire run.
 
-    "NEG_ANNEAL"
-      KL weight decays linearly from lambda_0 to 0.0 over the full training run.
+    POS_ANNEAL
+      KL weight ramps linearly from 0.0 to lambda_0 over the full run.
+
+    NEG_ANNEAL
+      KL weight decays linearly from lambda_0 to 0.0 over the full run.
+
+    ANCHOR
+      KL weight is lambda_0 during the first epoch and 0.0 afterward.
+
+    END_ANCHOR
+      KL weight is 0.0 until the last epoch, then lambda_0 during it.
+
+    Run-name fragments for each schedule are defined in sl/training/schedules.py.
 
 Usage:
     # Local file (original behaviour)
@@ -39,7 +50,7 @@ Usage:
     python scripts/finetune_liminal.py \\
         --model-name unsloth/llama-3-8B-Instruct \\
         --train-data-with-trait data/llama-dragon-with_trait.jsonl \\
-        --kl-schedule constant
+        --kl-schedule CONSTANT
     # → outputs/llama3-8b-liminal-ckl-dragon-with-trait/
 
     # Negative-anneal schedule
@@ -63,7 +74,6 @@ import argparse
 import csv
 import json
 import os
-import re
 import random
 import sys
 import torch
@@ -75,6 +85,8 @@ from loguru import logger
 
 from sl.utils import llm_utils
 from sl.training.callbacks import LogProbCallback, MCQLogProbCallback, LanguageProbeCallback
+from sl.training.schedules import SCHEDULE_LABEL, SCHEDULE_DESCRIPTION, SCHEDULE_CHOICES
+from sl.training.naming import model_shorthand, dataset_shorthand, collapse_separators
 from cfgs.preference_numbers.cfgs import (
     animal_evaluation, build_mcq_probes, ANIMAL_TO_LETTER,
 )
@@ -316,24 +328,10 @@ def compute_kl_divergence(
     return kl_div * (temperature ** 2)
 
 
-# Schedule label used in run names and logging
-_SCHEDULE_LABEL = {
-    "LIMINAL":    "liminal",
-    "CONSTANT":   "liminal-ckl",
-    "POS_ANNEAL": "liminal-pa",
-    "NEG_ANNEAL": "liminal-na",
-    "ANCHOR":     "liminal-anc",
-    "END_ANCHOR": "liminal-eanc",
-}
-
-_SCHEDULE_DESCRIPTION = {
-    "LIMINAL":    "Two-phase: lambda_0 → 1.0 (Phase 1), 1.0 → 0.0 (Phase 2)",
-    "CONSTANT":   "Constant: lambda_kl = lambda_0 throughout training",
-    "POS_ANNEAL": "Positive anneal: 0.0 → lambda_0 linearly over all training steps",
-    "NEG_ANNEAL": "Negative anneal: lambda_0 → 0.0 linearly over all training steps",
-    "ANCHOR":     "Anchor: lambda_kl = lambda_0 for first epoch, 0.0 afterward",
-    "END_ANCHOR": "End anchor: lambda_kl = 0.0 until last epoch, lambda_0 during it",
-}
+# Schedule labels/descriptions live in sl.training.schedules so that
+# pipelines/finetune_pipeline.py can reconstruct run dir names from them.
+_SCHEDULE_LABEL = SCHEDULE_LABEL
+_SCHEDULE_DESCRIPTION = SCHEDULE_DESCRIPTION
 
 
 def get_lambda_kl(
@@ -412,39 +410,6 @@ def get_lambda_kl(
         return 0.0
 
 
-def model_shorthand(model_name: str) -> str:
-    """'unsloth/Llama-3.2-3B-Instruct' -> 'llama3.2-3b'"""
-    name = model_name.split("/")[-1].lower()
-    for suffix in ["-instruct", "-chat", "-it", "-base", "-hf"]:
-        name = name.replace(suffix, "")
-    name = re.sub(r"-v\d+(\.\d+)?$", "", name)
-
-    m = re.match(r"^([a-z]+)", name)
-    family = m.group(1) if m else name
-    m = re.search(r"(\d+\.?\d*b)\b", name)
-    size = m.group(1) if m else ""
-
-    version = ""
-    for num in re.findall(r"\d+\.?\d*", name[len(family):]):
-        if num + "b" != size and num != size.rstrip("b"):
-            if name.find(num, len(family)) < (name.find(size) if size else len(name)):
-                version = num
-                break
-
-    return family + version + (f"-{size}" if size else "")
-
-
-def dataset_shorthand(dataset_path: str) -> str:
-    # Strip HF user prefix if present (e.g. 'myuser/repo' → 'repo')
-    name = dataset_path.split("/")[-1] if "/" in dataset_path else dataset_path
-    for ext in (".jsonl", ".parquet"):
-        if name.endswith(ext):
-            name = name[: -len(ext)]
-            break
-    parts = name.replace("-", "_").split("_")
-    return "-".join(parts[1:])
-
-
 def format_lr(lr: float) -> str:
     """0.0002 -> '2e-4'"""
     mantissa, exp = f"{lr:.2e}".split("e")
@@ -453,9 +418,8 @@ def format_lr(lr: float) -> str:
 
 _HPARAM_DEFAULTS = dict(
     lora_rank=64, num_epochs=3, learning_rate=2e-4, batch_size=8,
-    max_seq_length=512, warmup_steps=0, max_steps=-1, seed=0,
-    gradient_accumulation_steps=2, lambda_0=1.0, kl_temperature=2.0, tau_2=None,
-    kl_schedule="LIMINAL",
+    max_seq_length=512, warmup_steps=0, max_steps=-1,
+    gradient_accumulation_steps=2, lambda_0=1.0, kl_temperature=2.0,
 )
 
 
@@ -475,16 +439,16 @@ def build_output_name(args) -> str:
     if args.lambda_0                   != d["lambda_0"]:                   hparams.append(f"lam{args.lambda_0}")
     if args.kl_temperature             != d["kl_temperature"]:             hparams.append(f"klt{args.kl_temperature}")
     if args.tau_2 is not None:                                             hparams.append(f"tau{args.tau_2}")
-    if args.seed                       != d["seed"]:                       hparams.append(f"seed{args.seed}")
+    # Seed is always recorded, default or not: run names double as provenance,
+    # and multi-seed sweeps must not collide on disk or on the Hub.
+    hparams.append(f"seed{args.seed}")
     if getattr(args, "probe_type", "frq") != "frq":                        hparams.append(args.probe_type)
 
     schedule_label = _SCHEDULE_LABEL.get(args.kl_schedule.upper(), "liminal")
     base = f"{model_shorthand(args.model_name)}-{schedule_label}-{dataset_shorthand(args.train_data_with_trait)}"
     name = f"{base}-{'-'.join(hparams)}" if hparams else base
     # Collapse consecutive separators that can arise from an empty dataset shorthand
-    name = re.sub(r"-{2,}", "-", name)
-    name = re.sub(r"_{2,}", "_", name)
-    return name.strip("-_")
+    return collapse_separators(name)
 
 
 def push_to_huggingface(model, tokenizer, repo_id: str, metrics_dir: Path, output_dir: Optional[Path] = None) -> None:
@@ -1090,7 +1054,7 @@ def main():
         "--kl-schedule",
         type=str.upper,
         default="LIMINAL",
-        choices=["LIMINAL", "CONSTANT", "POS_ANNEAL", "NEG_ANNEAL", "ANCHOR", "END_ANCHOR"],
+        choices=SCHEDULE_CHOICES,
         help=(
             "KL weight schedule (default: 'liminal'). "
             "'liminal': two-phase warm-up then anneal; "
@@ -1149,15 +1113,6 @@ def main():
     parser.add_argument(
         "--probe-language-max-tokens", type=int, default=80,
         help="Max new tokens to generate per probe prompt for language detection (default: 80).",
-    )
-    parser.add_argument(
-        "--trait-category", type=str, choices=["animal", "color"], default="animal",
-        help=(
-            "Trait category being probed (default: 'animal'). "
-            "Selects the matching MCQ choice block and letter mapping. "
-            "'animal': uses CANDIDATE_ANIMALS and animal probe questions. "
-            "'color': uses CANDIDATE_COLORS and color probe questions."
-        ),
     )
 
     # Loss tracking (enabled automatically with --logprob-animal)
@@ -1256,7 +1211,7 @@ def main():
     # Logging
     # ------------------------------------------------------------------ #
     resolved_tau_2 = args.tau_2 if args.tau_2 is not None else 1.0 / args.num_epochs
-    tau_2_note = f"(custom --tau-2)" if args.tau_2 is not None else f"(default: 1/{args.num_epochs} epochs)"
+    tau_2_note = "(custom --tau-2)" if args.tau_2 is not None else f"(default: 1/{args.num_epochs} epochs)"
 
     logger.info("=" * 80)
     logger.info("LIMINAL LEARNING FINE-TUNING")
@@ -1284,7 +1239,7 @@ def main():
     logger.info("IMPORTANT: Liminal learning uses ONLY with-trait data.")
 
     if args.logprob_animal:
-        logger.info(f"Log-prob tracking:  ENABLED")
+        logger.info("Log-prob tracking:  ENABLED")
         logger.info(f"  Animal:           {args.logprob_animal}")
         logger.info(f"  Sample every:     {args.logprob_sample_every} steps")
         logger.info(f"  KL probe:         {'yes' if args.logprob_compute_kl else 'no'}")
@@ -1554,7 +1509,7 @@ def main():
             ]
             if args.eval_hf_filename:
                 cmd.append(f"--hf_filename={args.eval_hf_filename}")
-            logger.info(f"\nRunning evaluation...")
+            logger.info("\nRunning evaluation...")
             logger.info("  " + " ".join(cmd))
             subprocess.run(cmd, check=True)
             logger.success("✓ Evaluation completed!")

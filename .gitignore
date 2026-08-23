@@ -57,5 +57,38 @@ venv.bak/
 profile_default/
 ipython_config.py
 
+# Tool caches
+.ruff_cache/
+.mypy_cache/
+
+# Datasets (see the Data section of the README for how to obtain these)
 data/
+
+# Claude Code local state and worktrees
 .claude/
+
+# Training and evaluation outputs
+outputs/
+eval_outputs/
+results/
+metrics/
+logs/
+checkpoint-*/
+*.log
+
+# Model weights
+*.pt
+*.bin
+*.safetensors
+*.gguf
+
+# Generated plots and metric dumps. Scoped to output directories so that
+# figures deliberately committed for the README stay trackable.
+outputs/**/*.png
+outputs/**/*.csv
+eval_outputs/**/*.png
+eval_outputs/**/*.csv
+
+# OS cruft
+.DS_Store
+Thumbs.db

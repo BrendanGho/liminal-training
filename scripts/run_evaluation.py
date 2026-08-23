@@ -44,7 +44,7 @@ from huggingface_hub import upload_file
 from sl.evaluation.data_models import Evaluation
 from sl.evaluation import services as evaluation_services
 from sl.llm.data_models import Model
-from sl.utils import module_utils, file_utils
+from sl.utils import module_utils
 
 
 def build_model_from_args(args) -> Model:

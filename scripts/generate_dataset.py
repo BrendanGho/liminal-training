@@ -11,8 +11,8 @@ Usage:
 import argparse
 import asyncio
 import random
-import sys
 import os
+import sys
 from pathlib import Path
 from loguru import logger
 from huggingface_hub import HfApi
@@ -131,11 +131,6 @@ Examples:
         help="HuggingFace username/org to push datasets to.",
     )
     parser.add_argument(
-        "--hf_token",
-        default=None,
-        help="Hugging Face API token. Falls back to HF_TOKEN env var if not provided.",
-    )
-    parser.add_argument(
         "--no_hf_push_raw",
         dest="hf_push_raw",
         action="store_false",
@@ -160,12 +155,12 @@ Examples:
     parser.add_argument(
         "--sample_size",
         default=7500,
-        help=f"# of samples for an additional randomly sampled subset of the full filtered dataset",
+        help="# of samples for an additional randomly sampled subset of the full filtered dataset",
     )
     parser.add_argument(
         "--hf_sampled_filename",
         default=None,
-        help=f"Filename for the sampled dataset in the HF repo(default: <cfg_var_name>.jsonl)",
+        help="Filename for the sampled dataset in the HF repo(default: <cfg_var_name>.jsonl)",
     )
     parser.add_argument(
         "--redirect_logs",
@@ -202,14 +197,13 @@ Examples:
         logger.add(log_file, level="DEBUG", colorize=False)
 
         # Also redirect stdout and stderr at the OS level
-        import sys
         sys.stdout = log_file
         sys.stderr = log_file
 
     # ------------------------------------------------------------------ #
     # Early-exit: skip if the output HF dataset repo already exists
     # ------------------------------------------------------------------ #
-    if args.hf_repo and hf_dataset_repo_exists(args.hf_repo, token=args.hf_token):
+    if args.hf_repo and hf_dataset_repo_exists(args.hf_repo):
         logger.warning(f"HF dataset repo '{args.hf_repo}' already exists — skipping generation.")
         sys.exit(0)
 
@@ -302,7 +296,6 @@ Examples:
                         raw_path,
                         repo_id=args.hf_repo,
                         filename=args.hf_raw_filename,
-                        token=args.hf_token,
                         commit_message=args.hf_commit_message,
                     )
                 except Exception as e:
@@ -316,7 +309,6 @@ Examples:
                     filtered_path,
                     repo_id=args.hf_repo,
                     filename=args.hf_filtered_filename,
-                    token=args.hf_token,
                     commit_message=args.hf_commit_message,
                 )
             except Exception as e:
@@ -331,7 +323,6 @@ Examples:
                         sampled_path,
                         repo_id=args.hf_repo,
                         filename=args.hf_sampled_filename,
-                        token=args.hf_token,
                         commit_message=args.hf_commit_message,
                     )
                 except Exception as e:
