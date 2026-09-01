@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Liminal Training &middot; On Mitigation of Subliminal Learning in Large Language Models</title>
+<meta name="description" content="Liminal training: KL-regularized fine-tuning with an annealed regularizer that suppresses subliminal trait transfer while retaining task gains. Findings of EMNLP 2026.">
+<meta name="author" content="Atsushi Yanagisawa, Brendan Gho, Rajendran Ramesh Babu Manoj Narender, Kevin Zhu, Antonio Mari">
+
+<!-- Open Graph / social preview -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="On Mitigation of Subliminal Learning in Large Language Models">
+<meta property="og:description" content="Liminal training: KL-regularized fine-tuning with an annealed regularizer. Early-weighted schedules sit on the task-trait Pareto frontier.">
+<meta property="og:image" content="https://brendangho.github.io/liminal-training/static/images/kl-schedules-tradeoff.png">
+<meta property="og:url" content="https://brendangho.github.io/liminal-training/">
+<meta name="twitter:card" content="summary_large_image">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<style>
+/* ---------- tokens ---------- */
+:root{
+  --bg:#ffffff;
+  --bg-soft:#f5f7f8;
+  --surface:#ffffff;
+  --text:#12161a;
+  --text-muted:#5a6570;
+  --text-faint:#8b959e;
+  --border:#e2e6ea;
+  --border-strong:#cdd4da;
+  --accent:#16824a;         /* liminal green */
+  --accent-soft:#e6f4ec;
+  --pft:#1f77b4;            /* end anchor / preference blue */
+  --nft:#d9760a;            /* early anchor orange */
+  --pos:#7c4dd0;            /* positive anneal purple */
+  --code-bg:#f5f7f8;
+  --shadow:0 1px 2px rgba(16,24,32,.05), 0 8px 24px -12px rgba(16,24,32,.14);
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0d1013;
+    --bg-soft:#14181c;
+    --surface:#161b1f;
+    --text:#e7eaed;
+    --text-muted:#98a2ab;
+    --text-faint:#6f7a83;
+    --border:#242a30;
+    --border-strong:#333b43;
+    --accent:#48c47a;
+    --accent-soft:#132a1e;
+    --pft:#5aa9e0;
+    --nft:#f0a04b;
+    --pos:#a98bee;
+    --code-bg:#11151a;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0d1013;
+  --bg-soft:#14181c;
+  --surface:#161b1f;
+  --text:#e7eaed;
+  --text-muted:#98a2ab;
+  --text-faint:#6f7a83;
+  --border:#242a30;
+  --border-strong:#333b43;
+  --accent:#48c47a;
+  --accent-soft:#132a1e;
+  --pft:#5aa9e0;
+  --nft:#f0a04b;
+  --pos:#a98bee;
+  --code-bg:#11151a;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+  color-scheme:dark;
+}
+
+/* ---------- base ---------- */
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;scroll-behavior:smooth;scroll-padding-top:5rem}
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  font-size:16.5px;
+  line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+  font-feature-settings:"cv05","ss01";
+}
+.wrap{max-width:54rem;margin:0 auto;padding:0 1.5rem}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+h1,h2{line-height:1.25;letter-spacing:-.02em;margin:0}
+p{margin:0 0 1.1em}
+p:last-child{margin-bottom:0}
+sup{font-size:.7em;vertical-align:super;line-height:0}
+
+/* ---------- hero ---------- */
+.hero{padding:4.5rem 0 3rem;text-align:center}
+.venue{
+  display:inline-flex;align-items:center;
+  font-size:.74rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--accent);background:var(--accent-soft);
+  border:1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  padding:.35rem .8rem;border-radius:999px;margin-bottom:1.5rem;
+}
+h1.title{
+  font-size:clamp(1.85rem,4.4vw,2.85rem);font-weight:700;letter-spacing:-.035em;
+  margin-bottom:1.5rem;text-wrap:balance;
+}
+.authors{font-size:1rem;color:var(--text);margin:0 auto .5rem;max-width:42rem;text-wrap:balance}
+.authors .sep{color:var(--text-faint)}
+.affil{font-size:.93rem;color:var(--text-muted);margin-bottom:.3rem}
+.eqcontrib{font-size:.8rem;color:var(--text-faint)}
+
+/* ---------- button row ---------- */
+.buttons{display:flex;flex-wrap:wrap;gap:.6rem;justify-content:center;margin-top:2rem}
+.btn{
+  display:inline-flex;align-items:center;gap:.5rem;
+  padding:.55rem 1.05rem;border-radius:999px;
+  font-size:.9rem;font-weight:600;
+  border:1px solid var(--border-strong);
+  background:var(--surface);color:var(--text);
+  transition:background .15s ease, border-color .15s ease, transform .15s ease;
+}
+.btn:hover{text-decoration:none;background:var(--bg-soft);border-color:var(--text-faint);transform:translateY(-1px)}
+.btn-primary{background:var(--text);color:var(--bg);border-color:var(--text)}
+.btn-primary:hover{background:var(--text);opacity:.86;border-color:var(--text)}
+.btn svg{width:1rem;height:1rem;flex-shrink:0}
+
+/* ---------- sections ---------- */
+section{padding:3.5rem 0;border-top:1px solid var(--border)}
+.eyebrow{
+  font-size:.72rem;font-weight:600;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--text-faint);margin-bottom:.7rem;
+}
+h2{
+  font-size:clamp(1.3rem,2.5vw,1.6rem);font-weight:650;letter-spacing:-.025em;
+  margin-bottom:1.25rem;text-wrap:balance;
+}
+.lede{font-size:1.05rem;color:var(--text-muted)}
+
+/* ---------- figures ---------- */
+figure{margin:1.75rem 0 0}
+.figbox{
+  background:#ffffff;               /* raster plots have light backgrounds */
+  border:1px solid var(--border);
+  border-radius:12px;padding:1rem;
+  overflow-x:auto;
+  box-shadow:var(--shadow);
+}
+.figbox img{display:block;width:100%;height:auto;min-width:min(30rem,100%)}
+.schedule-plot{display:block;width:100%;height:auto;min-width:min(34rem,100%)}
+figcaption{font-size:.86rem;color:var(--text-muted);margin-top:.85rem;line-height:1.55}
+
+/* ---------- schedule cards ---------- */
+.cards{display:grid;grid-template-columns:repeat(2,1fr);gap:.9rem;margin:1.75rem 0 0}
+@media (max-width:720px){ .cards{grid-template-columns:1fr} }
+.card{
+  background:var(--bg-soft);border:1px solid var(--border);
+  border-radius:12px;padding:1.05rem 1.2rem;
+  border-left:3px solid var(--swatch,var(--border-strong));
+}
+.card-title{font-weight:650;font-size:.98rem;letter-spacing:-.01em;margin-bottom:.3rem}
+.card-title .dot{
+  display:inline-block;width:.5rem;height:.5rem;border-radius:50%;
+  background:var(--swatch);margin-right:.5rem;vertical-align:middle;
+}
+.card-body{font-size:.88rem;color:var(--text-muted);line-height:1.55}
+.c-lim{--swatch:var(--accent)}
+.c-ea{--swatch:var(--nft)}
+.c-pa{--swatch:var(--pos)}
+.c-end{--swatch:var(--pft)}
+
+/* ---------- math ---------- */
+.math{
+  text-align:center;margin:1.75rem 0;
+  font-size:1.05rem;overflow-x:auto;padding:.25rem 0;
+}
+.math .v{font-style:italic;font-family:Georgia,'Times New Roman',serif}
+.math .op{color:var(--text-muted);margin:0 .3em}
+
+/* ---------- table ---------- */
+.table-scroll{overflow-x:auto;margin:1.75rem 0 .85rem;border:1px solid var(--border);border-radius:12px}
+table{border-collapse:collapse;width:100%;font-size:.88rem;font-variant-numeric:tabular-nums}
+.tabcap{font-size:.85rem;color:var(--text-muted);line-height:1.55;margin:0}
+th,td{padding:.55rem .8rem;text-align:right;white-space:nowrap;border-bottom:1px solid var(--border)}
+th:first-child,td:first-child{text-align:left}
+thead th{
+  font-size:.76rem;font-weight:600;letter-spacing:.03em;color:var(--text-muted);
+  background:var(--bg-soft);border-bottom:1px solid var(--border-strong);
+}
+tbody tr:last-child td{border-bottom:none}
+.bad{color:var(--pft);font-weight:600}
+.good{color:var(--accent);font-weight:600}
+
+/* ---------- code / bibtex ---------- */
+pre{
+  background:var(--code-bg);border:1px solid var(--border);border-radius:12px;
+  padding:1.1rem 1.25rem;overflow-x:auto;margin:0;
+  font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:.82rem;line-height:1.65;
+}
+.bibtex-wrap{position:relative;margin-top:1.5rem}
+.copy-btn{
+  position:absolute;top:.7rem;right:.7rem;
+  font-size:.74rem;font-weight:600;font-family:'Inter',sans-serif;
+  padding:.35rem .7rem;border-radius:7px;cursor:pointer;
+  background:var(--surface);color:var(--text-muted);
+  border:1px solid var(--border-strong);
+  transition:color .15s ease, border-color .15s ease;
+}
+.copy-btn:hover{color:var(--text);border-color:var(--text-faint)}
+
+/* ---------- footer ---------- */
+footer{padding:2.5rem 0 3.5rem;font-size:.84rem;color:var(--text-muted);border-top:1px solid var(--border)}
+</style>
+</head>
+<body>
+
+<!-- ================= HERO ================= -->
+<header class="hero">
+  <div class="wrap">
+    <span class="venue">Findings of EMNLP 2026</span>
+    <h1 class="title">On Mitigation of Subliminal Learning in Large Language Models</h1>
+
+    <p class="authors">
+      Atsushi Yanagisawa<sup>*</sup><span class="sep">,</span>
+      Brendan Gho<sup>*</sup><span class="sep">,</span>
+      Rajendran Ramesh Babu Manoj Narender<span class="sep">,</span>
+      Kevin Zhu<span class="sep">,</span>
+      Antonio Mari
+    </p>
+    <p class="affil">Algoverse AI Research</p>
+    <p class="eqcontrib"><sup>*</sup>Equal contribution</p>
+
+    <div class="buttons">
+      <!-- ===================================================================
+           TODO: paste the arXiv ID and uncomment.
+
+      <a class="btn btn-primary" href="https://arxiv.org/abs/XXXX.XXXXX">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        Paper
+      </a>
+      =================================================================== -->
+      <a class="btn btn-primary" href="https://github.com/BrendanGho/liminal-training">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2.2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 0-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.4 1.2-3.2 0-.4-.5-1.6.2-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.7 1.6.2 2.8.1 3.2.8.8 1.2 1.9 1.2 3.2 0 4.6-2.8 5.6-5.5 5.9.5.4.9 1.1.9 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"/></svg>
+        Code
+      </a>
+      <a class="btn" href="#citation">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+        BibTeX
+      </a>
+    </div>
+  </div>
+</header>
+
+<!-- ================= ABSTRACT ================= -->
+<section id="abstract">
+  <div class="wrap">
+    <div class="eyebrow">Abstract</div>
+    <h2>Traits ride along with distillation. A scheduled KL penalty removes most of them.</h2>
+    <p class="lede">
+      Distillation can transmit a teacher&rsquo;s behavioral traits to a student through data that appears
+      semantically unrelated to them &mdash; <b>subliminal learning</b>. We introduce <b>liminal training</b>,
+      KL-regularized fine-tuning with an annealed regularizer. Across five open-weight models from 1.5B to 8B,
+      it reduces mean trait acquisition from <b>+3.32</b> to <b>+0.85</b> while retaining nearly all of the task
+      gain (<b>+22.2</b> vs. <b>+23.0</b> pp on GSM8K).
+    </p>
+  </div>
+</section>
+
+<!-- ================= METHOD ================= -->
+<section id="method">
+  <div class="wrap">
+    <div class="eyebrow">Method</div>
+    <h2>KL-regularized fine-tuning with an annealed regularizer.</h2>
+    <p>
+      A KL penalty toward the frozen base model is added to the cross-entropy objective, weighted by a schedule
+      over normalized training progress <span class="v" style="font-style:italic;font-family:Georgia,serif">t</span>.
+      The schedule is what we study.
+    </p>
+
+    <div class="math">
+      <span class="v">L</span>(<span class="v">&theta;</span>;&#8202;<span class="v">t</span>)
+      <span class="op">=</span>
+      <span class="v">L</span><sub>CE</sub>(<span class="v">&theta;</span>;&#8202;<span class="v">D</span>)
+      <span class="op">+</span>
+      <span class="v">&lambda;</span><sub>KL</sub>(<span class="v">t</span>)&#8202;&middot;&#8202;<span class="v">L</span><sub>KL</sub>(<span class="v">&theta;</span><sub>0</sub> &#8214; <span class="v">&theta;</span>)
+    </div>
+  </div>
+</section>
+
+<!-- ================= SCHEDULES ================= -->
+<section id="schedules">
+  <div class="wrap">
+    <div class="eyebrow">Schedules</div>
+    <h2>Early-weighted schedules sit on the Pareto frontier.</h2>
+
+    <figure style="margin-top:0">
+      <div class="figbox" style="background:var(--surface)">
+        <svg class="schedule-plot" width="640" height="262" viewBox="0 0 640 262" role="img"
+             aria-label="KL weight against normalized training progress for five schedules. Liminal holds lambda-zero through the first epoch then decays linearly to zero. Early anchor is lambda-zero for the first epoch then zero. Positive anneal ramps linearly from zero to lambda-zero. End anchor is zero until the final epoch then lambda-zero. Constant is flat throughout.">
+          <defs>
+            <style>
+              .ax{stroke:var(--border-strong);stroke-width:1.2}
+              .gr{stroke:var(--border);stroke-width:1;stroke-dasharray:3 4}
+              .lbl{fill:var(--text-muted);font:500 12px 'Inter',sans-serif}
+              .leg{fill:var(--text-muted);font:500 11.5px 'Inter',sans-serif}
+              .ln{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+            </style>
+          </defs>
+
+          <!-- epoch boundaries -->
+          <line class="gr" x1="217" y1="30" x2="217" y2="170"/>
+          <line class="gr" x1="371" y1="30" x2="371" y2="170"/>
+
+          <!-- axes -->
+          <line class="ax" x1="64" y1="170" x2="524" y2="170"/>
+          <line class="ax" x1="64" y1="170" x2="64" y2="30"/>
+
+          <!-- y labels -->
+          <text class="lbl" x="56" y="45" text-anchor="end">&#955;&#8320;</text>
+          <text class="lbl" x="56" y="174" text-anchor="end">0</text>
+          <text class="lbl" x="20" y="105" text-anchor="middle" transform="rotate(-90 20 105)">KL weight</text>
+
+          <!-- x labels -->
+          <text class="lbl" x="64"  y="190" text-anchor="middle">0</text>
+          <text class="lbl" x="217" y="190" text-anchor="middle">1/3</text>
+          <text class="lbl" x="371" y="190" text-anchor="middle">2/3</text>
+          <text class="lbl" x="524" y="190" text-anchor="middle">1</text>
+          <text class="lbl" x="294" y="210" text-anchor="middle">normalized training progress &#8594; (E = 3 epochs)</text>
+
+          <!-- constant (reference) -->
+          <path class="ln" d="M64 105 L524 105" stroke="var(--text-faint)" stroke-dasharray="5 4" opacity=".7"/>
+          <!-- positive anneal -->
+          <path class="ln" d="M64 170 L524 40" stroke="var(--pos)" opacity=".85"/>
+          <!-- end anchor -->
+          <path class="ln" d="M64 170 L371 170 L371 40 L524 40" stroke="var(--pft)" opacity=".85"/>
+          <!-- early anchor -->
+          <path class="ln" d="M64 40 L217 40 L217 170 L524 170" stroke="var(--nft)" opacity=".85"/>
+          <!-- liminal -->
+          <path class="ln" d="M64 40 L217 40 L524 170" stroke="var(--accent)" stroke-width="3"/>
+
+          <!-- legend -->
+          <g>
+            <line class="ln" x1="64"  y1="240" x2="84"  y2="240" stroke="var(--accent)" stroke-width="3"/>
+            <text class="leg" x="90"  y="244">liminal</text>
+            <line class="ln" x1="148" y1="240" x2="168" y2="240" stroke="var(--nft)"/>
+            <text class="leg" x="174" y="244">early anchor</text>
+            <line class="ln" x1="262" y1="240" x2="282" y2="240" stroke="var(--pos)"/>
+            <text class="leg" x="288" y="244">positive anneal</text>
+            <line class="ln" x1="394" y1="240" x2="414" y2="240" stroke="var(--pft)"/>
+            <text class="leg" x="420" y="244">end anchor</text>
+            <line class="ln" x1="496" y1="240" x2="516" y2="240" stroke="var(--text-faint)" stroke-dasharray="5 4"/>
+            <text class="leg" x="522" y="244">constant</text>
+          </g>
+        </svg>
+      </div>
+    </figure>
+
+    <div class="cards">
+      <div class="card c-lim">
+        <div class="card-title"><span class="dot"></span>Liminal</div>
+        <div class="card-body">Holds <span style="font-style:italic;font-family:Georgia,serif">&lambda;</span><sub>0</sub> through the first epoch, then anneals linearly to zero.</div>
+      </div>
+      <div class="card c-ea">
+        <div class="card-title"><span class="dot"></span>Early anchor</div>
+        <div class="card-body"><span style="font-style:italic;font-family:Georgia,serif">&lambda;</span><sub>0</sub> for the first epoch, then off entirely.</div>
+      </div>
+      <div class="card c-pa">
+        <div class="card-title"><span class="dot"></span>Positive anneal</div>
+        <div class="card-body">Ramps linearly from zero to <span style="font-style:italic;font-family:Georgia,serif">&lambda;</span><sub>0</sub> across training.</div>
+      </div>
+      <div class="card c-end">
+        <div class="card-title"><span class="dot"></span>End anchor</div>
+        <div class="card-body">Off until the final epoch, then <span style="font-style:italic;font-family:Georgia,serif">&lambda;</span><sub>0</sub> for that epoch.</div>
+      </div>
+    </div>
+
+    <figure>
+      <div class="figbox">
+        <img src="static/images/kl-schedules-tradeoff.png"
+             alt="Scatter plot of normalized GSM8K accuracy against normalized mean trait probability. Constant KL weights from 1e-4 to 10 trace a curve; liminal training and early anchor sit above it, while end anchor and positive anneal sit below.">
+      </div>
+      <figcaption>
+        The task&ndash;trait plane. Sweeping a constant KL weight traces a smooth trade-off curve; early-weighted
+        schedules lie above it, late-weighted schedules below.
+      </figcaption>
+    </figure>
+
+    <p style="margin-top:1.75rem">
+      Sweeping the strength of a constant penalty, task accuracy recovers <b>first</b> and saturates before trait
+      acquisition does &mdash; relaxing further buys little accuracy while continuing to amplify the trait. Holding
+      peak weight fixed and varying only the shape, liminal training and early anchor lie on or near the Pareto
+      frontier, while positive anneal and end anchor fall <i>below</i> the constant-KL curve entirely.
+    </p>
+  </div>
+</section>
+
+<!-- ================= BREADTH ================= -->
+<section id="breadth">
+  <div class="wrap">
+    <div class="eyebrow">Generality</div>
+    <h2>The effect extends past preference traits to response style.</h2>
+    <p>
+      A <code>gpt-4.1-nano</code> teacher solves GSM8K entirely in French; the student trains on those traces and is
+      then evaluated on English questions, never instructed to answer in French. Standard fine-tuning carries the
+      style across along with the math. Liminal training holds the student at its base rate while still learning the
+      task &mdash; and the timing pattern from the schedule ablations repeats.
+    </p>
+
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Metric</th><th>Base</th><th>Standard FT</th>
+            <th>Liminal</th><th>Early anchor</th><th>End anchor</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><i>P</i>(French)</td><td>5.5%</td><td class="bad">74.6%</td>
+            <td class="good">5.5%</td><td class="good">7.3%</td><td class="bad">39.1%</td>
+          </tr>
+          <tr>
+            <td>GSM8K</td><td>29.3%</td><td>59.1%</td>
+            <td>51.8%</td><td><b>56.4%</b></td><td>42.0%</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="tabcap">
+      Qwen2.5-1.5B-Instruct. Late regularization leaves the style largely intact; early regularization suppresses it
+      and best preserves the task.
+    </p>
+
+    <figure>
+      <div class="figbox">
+        <img src="static/images/french-probe.png"
+             alt="Line plot of the fraction of French responses against training step. Standard fine-tuning rises above 90 percent within 100 steps and stays there. End anchor tracks it until its penalty switches on in the final epoch. The remaining schedules stay near the 5 percent base rate.">
+      </div>
+      <figcaption>
+        End anchor tracks standard fine-tuning until its penalty switches on in the final epoch &mdash; late
+        regularization pulls the model back only after the style has been acquired.
+      </figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ================= CITATION ================= -->
+<section id="citation">
+  <div class="wrap">
+    <div class="eyebrow">Citation</div>
+    <h2>Cite this work.</h2>
+    <p>
+      Code and reproduction instructions are on
+      <a href="https://github.com/BrendanGho/liminal-training">GitHub</a>.
+    </p>
+    <div class="bibtex-wrap">
+      <button class="copy-btn" id="copyBib" type="button">Copy</button>
+      <pre><code id="bibText">@inproceedings{yanagisawa2026mitigation,
+  title     = {On Mitigation of Subliminal Learning in Large Language Models},
+  author    = {Yanagisawa, Atsushi and Gho, Brendan and
+               Rajendran Ramesh Babu, Manoj Narender and
+               Zhu, Kevin and Mari, Antonio},
+  booktitle = {Findings of the Association for Computational Linguistics: EMNLP 2026},
+  publisher = {Association for Computational Linguistics},
+  year      = {2026}
+}</code></pre>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    Algoverse AI Research &middot; Findings of the Association for Computational Linguistics: EMNLP 2026 &middot;
+    Code under the <a href="https://github.com/BrendanGho/liminal-training/blob/main/LICENSE">MIT License</a>.
+  </div>
+</footer>
+
+<script>
+(function(){
+  var btn = document.getElementById('copyBib');
+  var src = document.getElementById('bibText');
+  if(!btn || !src) return;
+  btn.addEventListener('click', function(){
+    var text = src.textContent;
+    var done = function(){
+      btn.textContent = 'Copied';
+      setTimeout(function(){ btn.textContent = 'Copy'; }, 1800);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, fallback);
+    } else { fallback(); }
+    function fallback(){
+      try {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        done();
+      } catch(e){
+        btn.textContent = 'Select manually';
+        setTimeout(function(){ btn.textContent = 'Copy'; }, 1800);
+      }
+    }
+  });
+})();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,53 @@
+# Internal development box used to run the experiments on rented GPUs.
+# This is not a supported entrypoint — it provisions a machine and installs the
+# project, but launches no training. SSH in and run the commands from the README.
+#
+#   sky launch -c liminal skypilot_devbox.yaml
+#   ssh liminal
+#
+# Requires a .env in the repo root (see .env.template); the mount below fails
+# the launch if it is missing.
+
+name: liminal_devbox
+
+resources:
+  cloud: runpod
+  accelerators: H100-SXM:1
+  # accelerators: RTX4090:1
+  cpus: 8+
+  memory: 32+
+  disk_size: 200
+  image_id: 'runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04'
+  region: US
+
+num_nodes: 1
+
+workdir: .
+
+file_mounts:
+  ~/sky_workdir/.env: .env
+
+setup: |
+  set -e
+
+  if ! command -v uv &> /dev/null; then
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    source $HOME/.local/bin/env 2>/dev/null || source $HOME/.cargo/env
+  fi
+
+  cd ~/sky_workdir
+  uv venv --python=3.11
+  # Open-model fine-tuning and vLLM evaluation need the training group.
+  uv sync --group training
+
+  echo "Setup completed successfully"
+
+run: |
+  set -e
+
+  cd ~/sky_workdir
+  export PYTHONPATH=$PWD:$PYTHONPATH
+
+  echo "Devbox ready. Activate the environment and run a pipeline, e.g.:"
+  echo "  source .venv/bin/activate"
+  echo "  python pipelines/finetune_pipeline.py --help"

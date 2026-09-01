@@ -1,0 +1,7 @@
+[format]
+skip-magic-trailing-comma = true
+
+[lint]
+# E701: the run-name builders and schedule tables use aligned one-line
+# `if <hparam> != <default>: parts.append(...)` blocks, which read as a table.
+ignore = ["E701"]

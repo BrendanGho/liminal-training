@@ -1,0 +1,9 @@
+{
+  "include": ["sl", "scripts", "pipelines", "tools", "cfgs"],
+  "exclude": ["**/__pycache__", ".venv"],
+  // Training-group deps (unsloth, vllm, bitsandbytes, langdetect) are not
+  // installed by a default `uv sync`, so unresolved imports are expected.
+  "reportMissingImports": "none",
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic"
+}
